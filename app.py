@@ -85,6 +85,7 @@ class App(tk.Tk):
         self.predictor = None
         self.cv_ref = load_cv_reference()
         self.autoplay = False
+        self._visible = set()
         self._style()
         self._build()
         self._bind_keys()
@@ -188,6 +189,16 @@ class App(tk.Tk):
         mid = ttk.Frame(body, style="Card.TFrame", padding=8)
         mid.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
         ttk.Label(mid, text="Imágenes de la carpeta", style="H.TLabel").pack(anchor="w")
+        ff = ttk.Frame(mid, style="Card.TFrame")
+        ff.pack(fill="x", pady=(2, 4))
+        ttk.Label(ff, text="Mostrar:", style="Card.TLabel").pack(side="left")
+        self.filter_var = tk.StringVar(value="Todas")
+        fcb = ttk.Combobox(ff, textvariable=self.filter_var, state="readonly", width=20,
+                           values=["Todas", "Solo errores (✘)", "Real = barco", "Real = no barco", "Sin etiquetar"])
+        fcb.pack(side="left", padx=4)
+        fcb.bind("<<ComboboxSelected>>", lambda e: (self.apply_filter(), self.focus_set()))
+        self.lbl_filter = ttk.Label(ff, text="", style="Small.TLabel")
+        self.lbl_filter.pack(side="left", padx=4)
         cols = ("n", "file", "pred", "p", "real", "ok")
         self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=30)
         for c, w, t in zip(cols, (40, 150, 60, 50, 60, 30), ("#", "Archivo", "Pred.", "P(b)", "Real", "")):
@@ -257,8 +268,11 @@ class App(tk.Tk):
     def open_folder(self):
         d = filedialog.askdirectory(title="Carpeta con imágenes de test",
                                     initialdir=os.path.join(ROOT, "test_ciego") if os.path.isdir(os.path.join(ROOT, "test_ciego")) else ROOT)
-        if not d:
-            return
+        if d:
+            self.load_folder(d)
+
+    def load_folder(self, d):
+        d = os.path.abspath(d)
         paths = []
         for r, _, fs in os.walk(d):
             paths += [os.path.join(r, f) for f in sorted(fs) if f.lower().endswith(IMG_EXT)]
@@ -306,7 +320,10 @@ class App(tk.Tk):
         self.truth[i] = lab
         self.update_row(i)
         if advance and i == self.idx:
-            self.next_unlabeled(refresh=False)
+            if any(t is None for t in self.truth):
+                self.next_unlabeled(refresh=False)
+            else:
+                self.go(1, refresh=False)
         self.refresh_all()
 
     def accept_pred(self):
@@ -343,8 +360,10 @@ class App(tk.Tk):
     def labels_from_csv(self):
         f = filedialog.askopenfilename(title="CSV de etiquetas (archivo,etiqueta)", filetypes=[("CSV", "*.csv")],
                                        initialdir=self.folder or ROOT)
-        if not f:
-            return
+        if f:
+            self.load_csv_labels(f)
+
+    def load_csv_labels(self, f):
         m = {}
         with open(f, encoding="utf-8-sig") as fh:
             for row in csv.reader(fh):
@@ -392,9 +411,15 @@ class App(tk.Tk):
         self.after(40, self._play_step)
 
     # ------------------------------------------------------------------ navegación
-    def go(self, d):
-        if self.files:
-            self.idx = int(np.clip(self.idx + d, 0, len(self.files) - 1))
+    def go(self, d, refresh=True):
+        if not self.files:
+            return
+        vis = self.visible_rows()
+        if not vis:
+            return
+        k = int(np.clip(vis.index(self.idx) + d, 0, len(vis) - 1)) if self.idx in vis else 0
+        self.idx = vis[k]
+        if refresh:
             self.show_current(); self.sync_tree()
 
     def next_unlabeled(self, refresh=True):
@@ -414,7 +439,7 @@ class App(tk.Tk):
             self.show_current()
 
     def sync_tree(self):
-        if self.files:
+        if self.files and self.idx in self._visible:
             iid = str(self.idx)
             self.tree.selection_set(iid)
             self.tree.see(iid)
@@ -428,11 +453,46 @@ class App(tk.Tk):
                 f"{self.proba[i]:.2f}", "—" if t is None else ("barco" if t else "no"), ok), \
             () if t is None else (("ok",) if t == pr else ("bad",))
 
+    def row_visible(self, i):
+        f = self.filter_var.get()
+        t = self.truth[i]
+        if f.startswith("Solo errores"):
+            return t is not None and t != self.pred(i)
+        if f.startswith("Real = barco"):
+            return t == 1
+        if f.startswith("Real = no barco"):
+            return t == 0
+        if f.startswith("Sin etiquetar"):
+            return t is None
+        return True
+
+    def visible_rows(self):
+        return [i for i in range(len(self.files)) if i in self._visible]
+
     def fill_tree(self):
         self.tree.delete(*self.tree.get_children())
         for i in range(len(self.files)):
             v, tag = self.row_values(i)
             self.tree.insert("", "end", iid=str(i), values=v, tags=tag)
+        self.apply_filter()
+
+    def apply_filter(self, *_):
+        if not self.files:
+            return
+        pos = 0
+        self._visible = set()
+        for i in range(len(self.files)):
+            if self.row_visible(i):
+                self.tree.reattach(str(i), "", pos)
+                pos += 1
+                self._visible.add(i)
+            else:
+                self.tree.detach(str(i))
+        self.lbl_filter.config(text=f"{pos} de {len(self.files)} filas")
+        if self._visible and self.idx not in self._visible:
+            self.idx = min(self._visible)
+        self.show_current()
+        self.sync_tree()
 
     def update_row(self, i):
         v, tag = self.row_values(i)
@@ -454,10 +514,15 @@ class App(tk.Tk):
         img = Image.fromarray(self.X[i]).resize((320, 320), Image.NEAREST)
         pr, p, t = self.pred(i), float(self.proba[i]), self.truth[i]
         hide = self.hide_var.get() and t is None
+        d = ImageDraw.Draw(img)
         if not hide:
-            d = ImageDraw.Draw(img)
             col = (26, 127, 55) if t is None or t == pr else (198, 40, 40)
             d.rectangle([2, 2, 317, 317], outline=col, width=4)
+            d.rectangle([6, 6, 180, 26], fill=(0, 0, 0))
+            d.text((10, 10), f"PRED: {'BARCO' if pr else 'NO BARCO'} ({p:.2f})", fill=(255, 255, 255))
+        if t is not None:
+            d.rectangle([6, 292, 180, 312], fill=(11, 92, 173) if t else (95, 107, 122))
+            d.text((10, 296), f"REAL: {'BARCO' if t else 'NO BARCO'}", fill=(255, 255, 255))
         self.tkimg = ImageTk.PhotoImage(img)
         self.canvas_img.config(image=self.tkimg)
         self.lbl_name.config(text=f"[{i + 1}/{len(self.files)}] {os.path.relpath(self.files[i], self.folder)}")
@@ -617,4 +682,21 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
-    App().mainloop()
+    import argparse
+    ap = argparse.ArgumentParser(description="UI de evaluación en vivo")
+    ap.add_argument("--carpeta", help="carpeta de imágenes de test a cargar al iniciar")
+    ap.add_argument("--etiquetas", help="CSV archivo,etiqueta con las marcas reales")
+    ap.add_argument("--modelo", choices=["final", "dev", "svm"], default="final")
+    a = ap.parse_args()
+    app = App()
+    app.model_var.set(list(MODEL_CHOICES)[["final", "dev", "svm"].index(a.modelo)])
+    if a.carpeta:
+        def _auto():
+            if app.predictor is None or app.predictor.name != app.model_var.get():
+                app.after(200, _auto)
+                return
+            app.load_folder(a.carpeta)
+            if a.etiquetas:
+                app.load_csv_labels(a.etiquetas)
+        app.after(300, _auto)
+    app.mainloop()
