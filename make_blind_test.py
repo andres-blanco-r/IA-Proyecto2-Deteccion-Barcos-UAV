@@ -5,11 +5,13 @@ import os
 import sys
 import csv
 import shutil
+import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from common import load_dataset, dev_test_split, DATA_DIR, ROOT
 
 X, y, files = load_dataset()
 _, te = dev_test_split(y)
+te = np.random.default_rng(2026).permutation(te)  # orden aleatorio: el nombre no delata la clase
 out = os.path.join(ROOT, "test_ciego")
 shutil.rmtree(out, ignore_errors=True)
 os.makedirs(out)
