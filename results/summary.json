@@ -1,0 +1,18 @@
+{
+  "grid_cnn_range": [
+    97.99998007189357,
+    98.78133768000502
+  ],
+  "mcnemar": {
+    "svm_ok_cnn_err": 3,
+    "svm_err_cnn_ok": 3,
+    "p_value_exact": 1.0
+  },
+  "holdout_final_acc": 0.99375,
+  "holdout_final_ci95": [
+    0.9854531417444686,
+    0.9973275453958835
+  ],
+  "baseline_holdout_acc": 0.89625,
+  "classic_holdout_acc": 0.99375
+}

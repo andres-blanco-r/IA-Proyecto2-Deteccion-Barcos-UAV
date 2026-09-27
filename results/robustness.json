@@ -1,0 +1,37 @@
+{
+  "limpio": {
+    "CNN sin aumento": 0.99125,
+    "CNN con aumento": 0.99375,
+    "SVM + descriptores": 0.99375
+  },
+  "rotación libre": {
+    "CNN sin aumento": 0.955,
+    "CNN con aumento": 0.9925,
+    "SVM + descriptores": 0.95875
+  },
+  "brillo/contraste": {
+    "CNN sin aumento": 0.9725,
+    "CNN con aumento": 0.9925,
+    "SVM + descriptores": 0.99375
+  },
+  "desenfoque": {
+    "CNN sin aumento": 0.98375,
+    "CNN con aumento": 0.9925,
+    "SVM + descriptores": 0.77625
+  },
+  "ruido σ=12": {
+    "CNN sin aumento": 0.75875,
+    "CNN con aumento": 0.85,
+    "SVM + descriptores": 0.845
+  },
+  "JPEG q=30": {
+    "CNN sin aumento": 0.99125,
+    "CNN con aumento": 0.9925,
+    "SVM + descriptores": 0.76375
+  },
+  "combinado": {
+    "CNN sin aumento": 0.91,
+    "CNN con aumento": 0.9725,
+    "SVM + descriptores": 0.8575
+  }
+}
