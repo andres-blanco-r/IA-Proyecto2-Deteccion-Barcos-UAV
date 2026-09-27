@@ -1,6 +1,6 @@
 # Detector de barcos para UAV — Proyecto 2 IA (UMNG, 2026-2)
 
-**Andrés Felipe Blanco Romero · 7004096**
+**Andrés Felipe Blanco Romero · 7004096** · Repositorio: https://github.com/andres-blanco-r/IA-Proyecto2-Deteccion-Barcos-UAV
 
 Clasificador binario *barco / no barco* sobre imágenes satelitales 80×80 RGB (ShipsNet, Kaggle) para el
 sistema de percepción de un dron de inspección portuaria (caso Rotterdam), con UI de evaluación en vivo.
