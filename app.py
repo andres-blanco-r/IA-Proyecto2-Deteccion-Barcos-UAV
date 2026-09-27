@@ -172,13 +172,13 @@ class App(tk.Tk):
         self.lbl_truth.pack(anchor="w", pady=(4, 8))
         bf = ttk.Frame(left, style="Card.TFrame")
         bf.pack(fill="x")
-        ttk.Button(bf, text="🚢 BARCO  [B/1]", style="Ship.TButton", command=lambda: self.set_label(1)).pack(side="left", expand=True, fill="x", padx=2)
-        ttk.Button(bf, text="🌊 NO BARCO  [N/0]", style="Sea.TButton", command=lambda: self.set_label(0)).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(bf, text="🚢 BARCO  [B/1]", style="Ship.TButton", takefocus=False, command=lambda: self.set_label(1)).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(bf, text="🌊 NO BARCO  [N/0]", style="Sea.TButton", takefocus=False, command=lambda: self.set_label(0)).pack(side="left", expand=True, fill="x", padx=2)
         nf = ttk.Frame(left, style="Card.TFrame")
         nf.pack(fill="x", pady=6)
-        ttk.Button(nf, text="◀ Anterior", command=lambda: self.go(-1)).pack(side="left", expand=True, fill="x", padx=2)
-        ttk.Button(nf, text="Siguiente sin etiquetar ⏭", command=self.next_unlabeled).pack(side="left", expand=True, fill="x", padx=2)
-        ttk.Button(nf, text="Siguiente ▶", command=lambda: self.go(1)).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(nf, text="◀ Anterior", takefocus=False, command=lambda: self.go(-1)).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(nf, text="Siguiente sin etiquetar ⏭", takefocus=False, command=self.next_unlabeled).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(nf, text="Siguiente ▶", takefocus=False, command=lambda: self.go(1)).pack(side="left", expand=True, fill="x", padx=2)
         self.lbl_prog = ttk.Label(left, text="0 / 0 etiquetadas", style="Card.TLabel")
         self.lbl_prog.pack(anchor="w")
         ttk.Label(left, text="Teclas: B/1 barco · N/0 no barco · ←/→ navegar · Espacio: aceptar predicción",
@@ -236,7 +236,10 @@ class App(tk.Tk):
             self.bind(k if k.startswith("<") else k, lambda e: self.set_label(0))
         self.bind("<Left>", lambda e: self.go(-1))
         self.bind("<Right>", lambda e: self.go(1))
-        self.bind("<space>", lambda e: self.accept_pred())
+        self.bind("<space>", lambda e: (self.accept_pred(), "break")[1])
+        # tras un clic, devolver el foco a la ventana para que las teclas no activen otro widget
+        self.bind_all("<ButtonRelease-1>", lambda e: self.after(1, self.focus_set)
+                      if isinstance(e.widget, ttk.Button) else None, add="+")
 
     # ------------------------------------------------------------------ modelo / datos
     def load_model(self, choice):
