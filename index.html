@@ -88,7 +88,8 @@ footer a{color:var(--blue)}
 .drop{outline:3px dashed var(--blue);outline-offset:-8px}
 .hidden{display:none}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+<script src="coi-serviceworker.min.js"></script>
+<script src="ort/ort.webgpu.min.js"></script>
 </head>
 <body>
 <header>
@@ -215,12 +216,21 @@ $("themeBtn").onclick = () => {
 };
 
 // ---------------- modelo
-ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
+ort.env.wasm.wasmPaths = "ort/";
+ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
+async function createSession(file){
+  if(navigator.gpu){
+    try { const s = await ort.InferenceSession.create(file, {executionProviders:["webgpu"]}); s._ep = "GPU (WebGPU)"; return s; }
+    catch(e){ console.warn("WebGPU no disponible:", e); }
+  }
+  const s = await ort.InferenceSession.create(file, {executionProviders:["wasm"]});
+  s._ep = `CPU (WebAssembly, ${ort.env.wasm.numThreads} hilo${ort.env.wasm.numThreads>1?"s":""})`; return s;
+}
 async function loadModel(name){
   status(`Cargando modelo ${name}…`);
-  if(!S.sessions[name]) S.sessions[name] = await ort.InferenceSession.create(S.meta.models[name].file, {executionProviders:["wasm"]});
+  if(!S.sessions[name]) S.sessions[name] = await createSession(S.meta.models[name].file);
   S.session = S.sessions[name]; S.model = name;
-  status(`Modelo listo: ${$("modelSel").selectedOptions[0].text} (${S.meta.models[name].trained_on})` + (S.items.length ? "" : " · abra una carpeta de test"));
+  status(`Modelo listo: ${$("modelSel").selectedOptions[0].text} (${S.meta.models[name].trained_on}) · motor: ${S.session._ep}` + (S.items.length ? "" : " · abra una carpeta de test"));
   if(S.items.length) await infer();
 }
 async function init(){
@@ -310,25 +320,34 @@ function tensorFor(idxs, tta){
 }
 async function infer(){
   if(!S.session || !S.items.length) return;
-  const tta = $("tta").checked, B = tta ? 16 : 128, n = S.items.length;
-  const P = new Float32Array(n); const t0 = performance.now();
+  const job = S.job = (S.job||0) + 1;             // cancela inferencias anteriores
+  const tta = $("tta").checked, V = tta ? 8 : 1, n = S.items.length;
+  const gpu = S.session._ep.startsWith("GPU"), B = Math.max(1, Math.floor((gpu ? 256 : 24*ort.env.wasm.numThreads) / V));
+  S.proba = new Float32Array(n).fill(NaN); S.done = 0; const t0 = performance.now(); let last = 0;
+  // primero la imagen actual y las siguientes, para poder etiquetar de inmediato
+  const order = []; for(let k=0;k<n;k++) order.push((S.idx+k)%n);
   for(let i=0;i<n;i+=B){
-    const idxs = []; for(let j=i;j<Math.min(n,i+B);j++) idxs.push(j);
+    const idxs = order.slice(i, i+B);
     const out = await S.session.run({x: tensorFor(idxs, tta)});
-    const p = out.p.data, V = tta ? 8 : 1;
-    idxs.forEach((ii,q)=>{ let a=0; for(let v=0;v<V;v++) a+=p[q*V+v]; P[ii]=a/V; });
-    if(i % (B*4) === 0){ status(`Inferencia ${Math.min(n,i+B)}/${n}…`); await new Promise(r=>setTimeout(r)); }
+    if(job !== S.job) return;
+    const p = out.p.data;
+    idxs.forEach((ii,q)=>{ let a=0; for(let v=0;v<V;v++) a+=p[q*V+v]; S.proba[ii]=a/V; });
+    S.done = Math.min(n, i+B);
+    if(performance.now()-last > 400 || S.done===n){ last = performance.now();
+      status(`Inferencia ${S.done}/${n} · ${S.session._ep}…`); render(false); }
+    await new Promise(r=>setTimeout(r));
   }
-  S.proba = P; S.inferMs = performance.now()-t0;
+  S.inferMs = performance.now()-t0;
   status(status_base()); render();
 }
 function status_base(){
-  return `${S.folder} · ${S.items.length} imágenes · ${$("modelSel").selectedOptions[0].text}${$("tta").checked?" + TTA":""} · inferencia ${(S.inferMs||0).toFixed(0)} ms (${((S.inferMs||0)/Math.max(1,S.items.length)).toFixed(1)} ms/img)`;
+  return `${S.folder} · ${S.items.length} imágenes · ${$("modelSel").selectedOptions[0].text}${$("tta").checked?" + TTA":""} · ${S.session?S.session._ep:""} · inferencia ${((S.inferMs||0)/1000).toFixed(1)} s (${((S.inferMs||0)/Math.max(1,S.items.length)).toFixed(1)} ms/img)`;
 }
 
 // ---------------- etiquetas
 const thr = () => parseFloat($("thr").value);
-const pred = i => S.proba && S.proba[i] >= thr() ? 1 : 0;
+const hasP = i => !!S.proba && !isNaN(S.proba[i]);
+const pred = i => hasP(i) && S.proba[i] >= thr() ? 1 : 0;
 function setLabel(lab, i = S.idx, advance = true){
   if(!S.items.length) return;
   if(S.truth[i] === null) S.order.push(i);
@@ -375,7 +394,7 @@ $("playBtn").onclick = () => {
 // ---------------- navegación y tabla
 function rowVisible(i){
   const f = $("filter").value, t = S.truth[i];
-  if(f.startsWith("Solo errores")) return t!==null && S.proba && t!==pred(i);
+  if(f.startsWith("Solo errores")) return t!==null && hasP(i) && t!==pred(i);
   if(f==="Real = barco") return t===1;
   if(f==="Real = no barco") return t===0;
   if(f==="Sin etiquetar") return t===null;
@@ -409,9 +428,9 @@ function render(scroll = true){
   for(let i=0;i<S.items.length;i++){
     const tr = rows[i]; if(!tr) continue;
     const vis = rowVisible(i); tr.style.display = vis ? "" : "none"; if(vis) S.visible.push(i);
-    const t = S.truth[i], p = S.proba ? pred(i) : null, c = tr.children;
+    const t = S.truth[i], p = hasP(i) ? pred(i) : null, c = tr.children;
     c[2].textContent = p===null ? "…" : (p ? "barco" : "no");
-    c[3].textContent = S.proba ? S.proba[i].toFixed(2) : "";
+    c[3].textContent = p===null ? "" : S.proba[i].toFixed(2);
     c[4].textContent = t===null ? "—" : (t ? "barco" : "no");
     c[5].textContent = t===null || p===null ? "" : (t===p ? "✔" : "✘");
     tr.className = (t===null||p===null ? "" : (t===p ? "ok" : "bad")) + (i===S.idx ? " cur" : "");
@@ -428,16 +447,16 @@ function showCurrent(){
   const i = S.idx, it = S.items[i], g = $("cv").getContext("2d");
   g.putImageData(new ImageData(new Uint8ClampedArray(it.px), 80, 80), 0, 0);
   $("fname").textContent = `[${i+1}/${n}] ${it.path}`;
-  const t = S.truth[i], hasP = !!S.proba, p = hasP ? S.proba[i] : 0, pr = pred(i);
+  const t = S.truth[i], ready = hasP(i), p = ready ? S.proba[i] : 0, pr = pred(i);
   const hide = $("hide").checked && t===null;
   const css = getComputedStyle(document.documentElement);
-  $("viewer").style.borderColor = hide || !hasP ? "transparent" : (t===null || t===pr ? css.getPropertyValue("--ok") : css.getPropertyValue("--bad"));
-  $("tagPred").classList.toggle("hidden", hide || !hasP);
+  $("viewer").style.borderColor = hide || !ready ? "transparent" : (t===null || t===pr ? css.getPropertyValue("--ok") : css.getPropertyValue("--bad"));
+  $("tagPred").classList.toggle("hidden", hide || !ready);
   $("tagPred").textContent = `PRED: ${pr ? "BARCO" : "NO BARCO"} (${p.toFixed(2)})`;
   $("tagReal").classList.toggle("hidden", t===null);
   $("tagReal").textContent = `REAL: ${t ? "BARCO" : "NO BARCO"}`;
   $("tagReal").style.background = t ? "#0b5cad" : "#5f6b7a";
-  if(hide || !hasP){ $("predTxt").textContent = hasP ? "Predicción: (oculta)" : "Predicción: …"; $("predTxt").style.color = "var(--muted)"; $("pbar").style.width = "0"; }
+  if(hide || !ready){ $("predTxt").textContent = ready ? "Predicción: (oculta)" : "Predicción: calculando…"; $("predTxt").style.color = "var(--muted)"; $("pbar").style.width = "0"; }
   else { $("predTxt").textContent = `Predicción: ${pr ? "🚢 BARCO" : "🌊 NO BARCO"}  P(barco)=${p.toFixed(3)}`; $("predTxt").style.color = pr ? "var(--blue)" : "var(--sea)"; $("pbar").style.width = (p*100)+"%"; }
   $("truthTxt").innerHTML = t===null ? "Etiqueta real: <span style='color:var(--muted)'>sin etiquetar</span>"
     : `Etiqueta real: <b>${t ? "BARCO" : "NO BARCO"}</b> → ${t===pr ? "<span class='good'>ACIERTO ✔</span>" : "<span class='warn'>ERROR ✘</span>"}`;
@@ -445,7 +464,7 @@ function showCurrent(){
 function wilson(k,n,z=1.96){ if(!n) return [0,0]; const p=k/n, d=1+z*z/n, c=(p+z*z/(2*n))/d, h=z*Math.sqrt(p*(1-p)/n+z*z/(4*n*n))/d; return [Math.max(0,c-h), Math.min(1,c+h)]; }
 function penalty(a){ return a < 0.98 ? 0.5*Math.ceil(Math.round((0.98-a)*1e6)/1e4/2) : 0; }
 function compute(){
-  const idx = S.order.filter(i=>S.truth[i]!==null); if(!idx.length || !S.proba) return null;
+  const idx = S.order.filter(i=>S.truth[i]!==null && hasP(i)); if(!idx.length) return null;
   let tp=0,tn=0,fp=0,fn=0; const curve=[];
   idx.forEach((i,k)=>{ const y=S.truth[i], h=pred(i); if(y&&h)tp++; else if(!y&&!h)tn++; else if(!y&&h)fp++; else fn++; curve.push((tp+tn)/(k+1)); });
   const n=idx.length, acc=(tp+tn)/n, prec=tp+fp?tp/(tp+fp):NaN, rec=tp+fn?tp/(tp+fn):NaN, spec=tn+fp?tn/(tn+fp):NaN;
@@ -512,7 +531,7 @@ $("exportBtn").onclick = () => {
   if(!S.items.length) return;
   const stamp = new Date().toISOString().replace(/[-:]/g,"").slice(0,15);
   let csv = "archivo,p_barco,prediccion,etiqueta_real,correcto\n";
-  S.items.forEach((it,i)=>{ const t=S.truth[i]; csv += `${it.path},${S.proba?S.proba[i].toFixed(4):""},${pred(i)},${t===null?"":t},${t===null?"":+(t===pred(i))}\n`; });
+  S.items.forEach((it,i)=>{ const t=S.truth[i]; csv += `${it.path},${hasP(i)?S.proba[i].toFixed(4):""},${pred(i)},${t===null?"":t},${t===null?"":+(t===pred(i))}\n`; });
   download(`predicciones_${stamp}.csv`, csv, "text/csv");
   const M = compute(); const js = {fecha:stamp, carpeta:S.folder, modelo:$("modelSel").selectedOptions[0].text, tta:$("tta").checked, umbral:thr(), n_imagenes:S.items.length, cv_referencia:S.meta.cv};
   if(M) Object.assign(js, {n:M.n,tp:M.tp,tn:M.tn,fp:M.fp,fn:M.fn,acc:M.acc,prec:M.prec,rec:M.rec,f1:M.f1,spec:M.spec,ic95:M.ci,penalizacion:penalty(M.acc)});
@@ -532,7 +551,7 @@ document.addEventListener("keydown", e => {
   const k = e.key.toLowerCase();
   if(k==="b"||k==="1"){ setLabel(1); e.preventDefault(); }
   else if(k==="n"||k==="0"){ setLabel(0); e.preventDefault(); }
-  else if(k===" "){ if(S.items.length && S.proba) setLabel(pred(S.idx)); e.preventDefault(); }
+  else if(k===" "){ if(S.items.length && hasP(S.idx)) setLabel(pred(S.idx)); e.preventDefault(); }
   else if(k==="arrowleft"){ go(-1); e.preventDefault(); }
   else if(k==="arrowright"){ go(1); e.preventDefault(); }
 });
