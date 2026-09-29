@@ -5,6 +5,13 @@
 Clasificador binario *barco / no barco* sobre imágenes satelitales 80×80 RGB (ShipsNet, Kaggle) para el
 sistema de percepción de un dron de inspección portuaria (caso Rotterdam), con UI de evaluación en vivo.
 
+## Interfaz web (sin instalar nada)
+
+**https://andres-blanco-r.github.io/IA-Proyecto2-Deteccion-Barcos-UAV/** — abrir en Chrome o Edge, pulsar
+*Abrir carpeta de test* (o *Cargar test ciego de ejemplo*), etiquetar con `B`/`N` y ver las métricas en vivo.
+El modelo corre en el navegador (ONNX Runtime Web, WebGPU/WASM); las imágenes no se suben a ningún servidor.
+Fuente en `docs/` (publicada en la rama `gh-pages`); `python export_onnx.py` regenera los modelos ONNX.
+
 ## Resultados (hold-out ciego simulado, n = 800, nunca usado para entrenar ni sintonizar)
 
 | Modelo | CV 5-fold | Hold-out |

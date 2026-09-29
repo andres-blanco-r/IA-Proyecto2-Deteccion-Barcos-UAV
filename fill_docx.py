@@ -17,6 +17,7 @@ CODIGO, APELLIDO = "7004096", "Blanco"
 NOMBRE = "Andrés Felipe Blanco Romero"
 OUT = os.path.join(ROOT, f"IA_Proyecto2_{CODIGO}_{APELLIDO}.docx")
 REPO = sys.argv[1] if len(sys.argv) > 1 else ROOT
+WEB = "https://andres-blanco-r.github.io/IA-Proyecto2-Deteccion-Barcos-UAV/"
 FECHA = sys.argv[2] if len(sys.argv) > 2 else "Día de la prueba en vivo (segundo corte 2026-2)"
 
 C = json.load(open(os.path.join(RES, "classic.json"), encoding="utf-8"))
@@ -104,7 +105,7 @@ ident = {
     9: CODIGO,
     10: "Individual",
     11: FECHA,
-    12: f"UI de escritorio (Python/Tkinter): app.py — repositorio: {REPO}  (ejecutar: python app.py o EJECUTAR_UI.bat)",
+    12: f"UI web (abrir en Chrome/Edge): {WEB}  ·  UI de escritorio de respaldo: app.py (python app.py o EJECUTAR_UI.bat)  ·  repositorio: {REPO}",
     13: "Carpeta de test del docente, seleccionada en la UI con «Abrir carpeta de test» (lectura recursiva, cualquier "
         "formato/tamaño → 80×80). Ensayo previo: PARCIAL2\\test_ciego\\ (800 imágenes hold-out anonimizadas; clave en clave_test_ciego.csv).",
     14: "Ships in Satellite Imagery (ShipsNet), R. Hammell, Kaggle: 4000 chips RGB 80×80 (1000 barco / 3000 no barco), "
@@ -116,7 +117,7 @@ for r, v in ident.items():
 # ------------------------------------------------------------------ 3. Registro de evidencias
 t4 = d.tables[4]
 ev = {
-    1: "app.py (UI) + src/predictor.py. Anexo A.9 (capturas). Carga desde carpeta, etiquetado por botones/teclado "
+    1: f"UI web {WEB} (docs/index.html, ONNX en el navegador) y UI de escritorio app.py. Anexo A.9. Carga desde carpeta, etiquetado por botones/teclado "
        "(B/1, N/0, espacio = aceptar), inferencia automática al cargar (CNN ensamble + TTA o SVM), exportación de reporte.",
     2: "Anexo A.1–A.8 y A.10: train_classic.py, train_cnn.py, make_figures.py; results/classic.json, results/cnn.json, "
        f"figuras results/fig_*.png. Mejora demostrable: baseline {pc(S['baseline_holdout_acc'])} → final {pc(S['holdout_final_acc'])} (hold-out).",
@@ -288,6 +289,10 @@ P(f"Conclusión: con aumento de datos la CNN mantiene > 99 % ante rotación libr
   "todos los modelos y queda como trabajo futuro (aumento con ruido de mayor varianza / denoising a bordo).")
 
 H2("A.9 Interfaz de usuario para la prueba en vivo (E1, E3, E4)")
+P(f"Se entregan dos interfaces con el mismo flujo y las mismas métricas: (1) UI web publicada en {WEB}, que ejecuta el "
+  "ensamble CNN exportado a ONNX directamente en el navegador (WebGPU o WebAssembly multihilo; las imágenes no salen del equipo) "
+  "y (2) UI de escritorio en Python (app.py) como respaldo sin conexión. Se verificó que ambas producen las mismas "
+  "probabilidades que PyTorch (diferencia máxima 1.8e-7 en ONNX) y las mismas métricas en test_ciego (99.38 %, matriz 596/4/1/199).")
 B("«Abrir carpeta de test» → carga recursiva de PNG/JPG/TIF/BMP de cualquier tamaño (se redimensionan a 80×80).", "Carga: ")
 B("inmediata con el modelo elegido (CNN ensamble final, CNN dev o SVM+descriptores), TTA configurable y umbral ajustable; "
   "se reporta el tiempo total y por imagen.", "Inferencia: ")
