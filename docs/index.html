@@ -104,8 +104,8 @@ footer a{color:var(--blue)}
 <div class="tool">
   <label class="btn primary" for="dirInput">📂 Abrir carpeta de test</label>
   <input id="dirInput" type="file" webkitdirectory directory multiple class="hidden">
-  <label class="btn" for="filesInput">🖼 Imágenes sueltas</label>
-  <input id="filesInput" type="file" accept="image/*" multiple class="hidden">
+  <label class="btn" for="filesInput" title="Seleccione varias imágenes (y, si quiere, su CSV de etiquetas)">🖼 Archivos sueltos</label>
+  <input id="filesInput" type="file" accept="image/*,.csv,.txt" multiple class="hidden">
   <button class="btn" id="demoBtn">⚓ Cargar test ciego de ejemplo (800)</button>
   <span class="field">Modelo
     <select id="modelSel">
@@ -124,6 +124,7 @@ footer a{color:var(--blue)}
   <button class="btn" id="exportBtn">💾 Exportar reporte</button>
 </div>
 <div id="status">Cargando modelo…</div>
+<div class="hint" style="padding:0 16px 8px">Al abrir o <b>arrastrar una carpeta</b> a la página, las etiquetas se detectan solas si vienen en un CSV dentro de la carpeta, en el nombre (<code>1__</code>/<code>0__</code>) o en subcarpetas (<code>ship</code>/<code>no_ship</code>, <code>barco</code>/<code>no_barco</code>, <code>1</code>/<code>0</code>).</div>
 
 <main>
   <section class="card">
@@ -204,8 +205,11 @@ footer a{color:var(--blue)}
 const $ = id => document.getElementById(id);
 const S = { meta:null, sessions:{}, session:null, model:"cnn_final", items:[], proba:null, truth:[], order:[], idx:0, visible:[], playing:false, folder:"" };
 const EXT = /\.(png|jpe?g|bmp|gif|webp|tiff?)$/i;
-const POS = new Set(["1","ship","ships","barco","barcos","positivo","pos"]);
-const NEG = new Set(["0","no_ship","noship","no-ship","no_barco","nobarco","no barco","negativo","neg"]);
+// etiquetas aceptadas (se normalizan: minúsculas, sin espacios/guiones/guiones bajos ni tildes)
+const POS = new Set(["1","ship","ships","barco","barcos","positivo","pos","si","true","yes"]);
+const NEG = new Set(["0","noship","noships","nobarco","nobarcos","negativo","neg","no","false"]);
+const norm = t => String(t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[\s_\-.]/g,"");
+const labelOf = t => { const k = norm(t); return POS.has(k) ? 1 : NEG.has(k) ? 0 : null; };
 
 // ---------------- tema
 (function(){ let t=null; try{t=localStorage.getItem("theme")}catch(e){} if(t) document.documentElement.dataset.theme=t; })();
@@ -253,7 +257,7 @@ async function decode(blob){
 async function loadList(list){ // list: [{name, path, blob}]
   if(!list.length){ status("No se encontraron imágenes."); return; }
   list.sort((a,b)=>natCmp(a.path,b.path));
-  S.items = []; S.truth = new Array(list.length).fill(null); S.order = []; S.idx = 0; S.proba = null;
+  S.items = []; S.truth = new Array(list.length).fill(null); S.order = []; S.idx = 0; S.proba = null; S.labelMsg = "";
   for(let i=0;i<list.length;i++){
     if(i % 50 === 0){ status(`Decodificando imágenes ${i}/${list.length}…`); await new Promise(r=>setTimeout(r)); }
     let px; try{ px = await decode(list[i].blob); }catch(e){ px = new Uint8ClampedArray(80*80*4); }
@@ -261,23 +265,41 @@ async function loadList(list){ // list: [{name, path, blob}]
   }
   buildTable(); await infer();
 }
+// carga una carpeta (o archivos): imágenes + CSV de etiquetas si lo trae; aplica las etiquetas automáticamente
+async function handleFiles(entries, folder){ // entries: [{name, path, blob}]
+  const imgs = entries.filter(f=>EXT.test(f.name));
+  const pref = f => /clave|label|etiq|truth|gt/i.test(f.name) ? 1 : 0;
+  const csvs = entries.filter(f=>/\.(csv|txt)$/i.test(f.name)).sort((a,b)=>pref(b)-pref(a));
+  if(!imgs.length){ status(entries.length ? `La selección no contiene imágenes (${entries.length} archivos, ninguno PNG/JPG/BMP/TIF).` : "No se seleccionó nada. En el diálogo elija la carpeta y confirme «Subir»."); return; }
+  S.folder = folder || "(selección)";
+  await loadList(imgs);
+  let msg = "";
+  for(const c of csvs){
+    const labs = parseCsv(await c.blob.text()), n = labs.filter(x=>x!==null).length;
+    if(n){ applyLabels(labs, c.name); msg = `${n} de ${imgs.length} etiquetas tomadas de ${c.name}`; break; }
+  }
+  if(!msg){ const labs = autoLabels(), n = labs.filter(x=>x!==null).length;
+    if(n){ applyLabels(labs, "nombres/subcarpetas"); msg = `${n} de ${imgs.length} etiquetas tomadas de los nombres/subcarpetas`; } }
+  S.labelMsg = msg || "sin etiquetas en la carpeta: etiquete con B/N o cargue un CSV";
+  status(status_base() + " · " + S.labelMsg);
+}
 $("dirInput").onchange = e => {
-  const fs = [...e.target.files].filter(f=>EXT.test(f.name));
-  S.folder = fs.length ? (fs[0].webkitRelativePath||"").split("/")[0] : "";
-  loadList(fs.map(f=>({name:f.name, path:f.webkitRelativePath||f.name, blob:f}))); e.target.value = "";
+  const fs = [...e.target.files];
+  const folder = fs.length ? (fs[0].webkitRelativePath||"").split("/")[0] : "";
+  handleFiles(fs.map(f=>({name:f.name, path:f.webkitRelativePath||f.name, blob:f})), folder); e.target.value = "";
 };
-$("filesInput").onchange = e => { S.folder = "(imágenes sueltas)"; loadList([...e.target.files].filter(f=>EXT.test(f.name)).map(f=>({name:f.name,path:f.name,blob:f}))); e.target.value=""; };
+$("filesInput").onchange = e => { handleFiles([...e.target.files].map(f=>({name:f.name,path:f.name,blob:f})), "(archivos seleccionados)"); e.target.value=""; };
 document.addEventListener("dragover", e=>{e.preventDefault(); document.body.classList.add("drop");});
 document.addEventListener("dragleave", e=>{ if(e.target===document.body||!e.relatedTarget) document.body.classList.remove("drop"); });
 document.addEventListener("drop", async e=>{
   e.preventDefault(); document.body.classList.remove("drop");
   const out=[]; const walk = async (entry, pre) => {
-    if(entry.isFile){ const f = await new Promise(r=>entry.file(r)); if(EXT.test(f.name)) out.push({name:f.name,path:pre+f.name,blob:f}); }
+    if(entry.isFile){ const f = await new Promise(r=>entry.file(r)); out.push({name:f.name,path:pre+f.name,blob:f}); }
     else if(entry.isDirectory){ const rd = entry.createReader(); let batch;
       do { batch = await new Promise(r=>rd.readEntries(r)); for(const en of batch) await walk(en, pre+entry.name+"/"); } while(batch.length); }
   };
   for(const it of e.dataTransfer.items){ const en = it.webkitGetAsEntry && it.webkitGetAsEntry(); if(en) await walk(en, ""); }
-  S.folder = "(arrastrado)"; loadList(out);
+  handleFiles(out, out.length && out[0].path.includes("/") ? out[0].path.split("/")[0] : "(arrastrado)");
 });
 $("demoBtn").onclick = async () => {
   status("Descargando test ciego de ejemplo…");
@@ -338,7 +360,7 @@ async function infer(){
     await new Promise(r=>setTimeout(r));
   }
   S.inferMs = performance.now()-t0;
-  status(status_base()); render();
+  status(status_base() + (S.labelMsg ? " · " + S.labelMsg : "")); render();
 }
 function status_base(){
   return `${S.folder} · ${S.items.length} imágenes · ${$("modelSel").selectedOptions[0].text}${$("tta").checked?" + TTA":""} · ${S.session?S.session._ep:""} · inferencia ${((S.inferMs||0)/1000).toFixed(1)} s (${((S.inferMs||0)/Math.max(1,S.items.length)).toFixed(1)} ms/img)`;
@@ -358,8 +380,9 @@ function setLabel(lab, i = S.idx, advance = true){
 function autoLabels(){
   return S.items.map(it=>{
     const m = /^([01])__/.exec(it.name); if(m) return +m[1];
-    const parts = it.path.split("/"); const parent = (parts.length>1 ? parts[parts.length-2] : "").trim().toLowerCase();
-    return POS.has(parent) ? 1 : NEG.has(parent) ? 0 : null;
+    const parts = it.path.split("/");
+    for(let k=parts.length-2;k>=1;k--){ const l = labelOf(parts[k]); if(l!==null) return l; }   // subcarpeta más cercana
+    return null;
   });
 }
 function applyLabels(labs, src){
@@ -368,11 +391,22 @@ function applyLabels(labs, src){
 }
 $("nameBtn").onclick = () => { const l = autoLabels(); if(l.every(x=>x===null)) return status("Los nombres/subcarpetas no contienen etiquetas (1__/0__, ship/no_ship)."); applyLabels(l, "nombres/subcarpetas"); };
 function parseCsv(txt){
-  const m = new Map();
-  txt.split(/\r?\n/).forEach(line=>{ const c = line.split(/[,;]/); if(c.length>=2 && /^[01]$/.test(c[1].trim())) m.set(c[0].trim().split(/[\\/]/).pop(), +c[1].trim()); });
-  return S.items.map(it=> m.has(it.name) ? m.get(it.name) : null);
+  // acepta archivo,etiqueta | archivo;etiqueta | tabulado; etiqueta 1/0, barco/no barco, ship/no_ship, si/no, true/false
+  const m = new Map(), clean = x => x.trim().replace(/^"|"$/g,""), base = x => clean(x).split(/[\\/]/).pop().toLowerCase(), stem = x => x.replace(/\.[^.]+$/,"");
+  txt.replace(/^\uFEFF/,"").split(/\r?\n/).forEach(line=>{
+    const c = line.split(/[,;\t]/).map(clean); if(c.length<2) return;
+    let fi = c.findIndex(x=>EXT.test(x)); if(fi<0) fi = 0;
+    let lab = null; for(let j=0;j<c.length && lab===null;j++) if(j!==fi) lab = labelOf(c[j]);
+    if(lab!==null){ const b = base(c[fi]); m.set(b, lab); m.set(stem(b), lab); }
+  });
+  return S.items.map(it=>{ const b = it.name.toLowerCase(); return m.has(b) ? m.get(b) : (m.has(stem(b)) ? m.get(stem(b)) : null); });
 }
-$("csvInput").onchange = async e => { const f = e.target.files[0]; if(!f) return; applyLabels(parseCsv(await f.text()), f.name); e.target.value=""; };
+$("csvInput").onchange = async e => { const f = e.target.files[0]; if(!f) return;
+  if(!S.items.length){ status("Primero abra la carpeta de imágenes; después cargue el CSV."); e.target.value=""; return; }
+  const labs = parseCsv(await f.text()), n = labs.filter(x=>x!==null).length;
+  if(!n) status(`${f.name}: ninguna fila coincide con los nombres de las imágenes cargadas (formato esperado: archivo,etiqueta).`);
+  else applyLabels(labs, f.name);
+  e.target.value=""; };
 $("clearBtn").onclick = () => { S.truth = S.truth.map(()=>null); S.order=[]; render(); };
 $("playBtn").onclick = () => {
   if(S.playing){ S.playing=false; $("playBtn").textContent="▶ Reproducir"; return; }
