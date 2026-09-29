@@ -216,7 +216,7 @@ $("themeBtn").onclick = () => {
 };
 
 // ---------------- modelo
-ort.env.wasm.wasmPaths = "ort/";
+ort.env.wasm.wasmPaths = new URL("ort/", location.href).href;
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
 async function createSession(file){
   if(navigator.gpu){
