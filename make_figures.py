@@ -186,3 +186,19 @@ S.update({"mcnemar": {"svm_ok_cnn_err": b01, "svm_err_cnn_ok": b10, "p_value_exa
           "classic_holdout_acc": C["holdout_best_classic"]["accuracy"]})
 save_json(S, "summary.json")
 print(json.dumps(S, indent=1))
+
+# 10. Cambio de dominio (validación externa) ---------------------------------------------------
+if os.path.exists(out("domain_shift.json")):
+    DS = load_json("domain_shift.json")
+    ks = list(DS)
+    fig, ax = plt.subplots(figsize=(7.5, 3))
+    x = np.arange(len(ks))
+    ax.bar(x - 0.2, [DS[k]["holdout_acc"] * 100 for k in ks], 0.4, color=LBLUE, label="Hold-out ShipsNet (n=800)")
+    ax.bar(x + 0.2, [DS[k]["ext_acc"] * 100 for k in ks], 0.4, color=BLUE, label="Externo TestSet2 (n=40)")
+    for i, k in enumerate(ks):
+        ax.text(i + 0.2, DS[k]["ext_acc"] * 100 + 0.4, f"{DS[k]['ext_acc'] * 100:.1f}%", ha="center", fontsize=8, fontweight="bold")
+    ax.axhline(98, color=RED, ls="--", lw=1, label="Meta 98 %")
+    ax.set_xticks(x); ax.set_xticklabels(ks, fontsize=8); ax.set_ylim(75, 101); ax.set_ylabel("Accuracy (%)")
+    ax.set_title("Cambio de dominio: ShipsNet (Planet) → imágenes de otra fuente")
+    ax.legend(fontsize=7, loc="lower left")
+    fig.savefig(out("fig_dominio.png")); plt.close(fig)

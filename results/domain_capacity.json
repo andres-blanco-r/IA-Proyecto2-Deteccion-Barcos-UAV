@@ -1,0 +1,50 @@
+{
+  "ancho 0.5, 45 épocas": {
+    "width": 0.5,
+    "epochs": 45,
+    "holdout_acc": 0.99,
+    "ext_acc": 0.95,
+    "params": 294258,
+    "lat_ms": 4.106846000000104,
+    "ext_misses": [
+      "img10.png",
+      "img29.png"
+    ]
+  },
+  "ancho 0.5, 80 épocas": {
+    "width": 0.5,
+    "epochs": 80,
+    "holdout_acc": 0.9925,
+    "ext_acc": 0.95,
+    "params": 294258,
+    "lat_ms": 4.320496000000276,
+    "ext_misses": [
+      "img10.png",
+      "img12.png"
+    ]
+  },
+  "ancho 1.0, 45 épocas": {
+    "width": 1.0,
+    "epochs": 45,
+    "holdout_acc": 0.99125,
+    "ext_acc": 0.95,
+    "params": 1173730,
+    "lat_ms": 11.477518000000373,
+    "ext_misses": [
+      "img10.png",
+      "img12.png"
+    ]
+  },
+  "ancho 1.0, 80 épocas": {
+    "width": 1.0,
+    "epochs": 80,
+    "holdout_acc": 0.995,
+    "ext_acc": 0.95,
+    "params": 1173730,
+    "lat_ms": 11.722422000000279,
+    "ext_misses": [
+      "img10.png",
+      "img12.png"
+    ]
+  }
+}

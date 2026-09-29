@@ -288,11 +288,27 @@ P(f"Conclusión: con aumento de datos la CNN mantiene > 99 % ante rotación libr
   "de datos, aunque ambos empaten en el test limpio (McNemar p = 1.0). El ruido fuerte (σ = 12) es el caso más exigente para "
   "todos los modelos y queda como trabajo futuro (aumento con ruido de mayor varianza / denoising a bordo).")
 
+if os.path.exists(os.path.join(RES, "domain_shift.json")):
+    DS = json.load(open(os.path.join(RES, "domain_shift.json"), encoding="utf-8"))
+    H2("A.8c Validación externa y cambio de dominio (modelo v2)")
+    P("Se probó el modelo con 40 imágenes de otra fuente (TestSet2: imágenes aéreas más nítidas, agua azul oscura, barcos "
+      "portacontenedores con más detalle). Estas imágenes NUNCA se usaron para entrenar: sirven solo como validación externa. "
+      "El modelo v1 perdía barcos en ese estilo (sin falsas alarmas). Se diseñó un aumento de datos de dominio —tinte por canal "
+      "del agua, saturación, gamma, escala 0,74–1,35× y nitidez/desenfoque— y se comparó contra la normalización por imagen:")
+    rows = [["Variante (entrenada solo con ShipsNet)", "Hold-out ShipsNet", "Externo TestSet2", "Recall externo", "Falsas alarmas"]]
+    for k, v in DS.items():
+        rows.append([k, pc(v["holdout_acc"]), pc(v["ext_acc"]), pc(v["ext_recall"]), v["ext_fp"]])
+    table(rows, widths=[2.4, 1.2, 1.2, 1.1, 1.0])
+    FIG("fig_dominio.png", "Figura A9c. Generalización a otra fuente de imágenes según la estrategia de aumento/normalización.")
+    P("Decisión: el aumento de dominio sube la validación externa de 87,5 % a 97,5 % manteniendo > 99 % en ShipsNet; la "
+      "normalización por imagen no ayuda (elimina información de contraste útil). El modelo desplegado (v2) usa aumento de dominio. "
+      "El único error externo restante es un barco atracado junto al muelle (caso ambiguo según el criterio de ShipsNet).")
+
 H2("A.9 Interfaz de usuario para la prueba en vivo (E1, E3, E4)")
 P(f"Se entregan dos interfaces con el mismo flujo y las mismas métricas: (1) UI web publicada en {WEB}, que ejecuta el "
   "ensamble CNN exportado a ONNX directamente en el navegador (WebGPU o WebAssembly multihilo; las imágenes no salen del equipo) "
   "y (2) UI de escritorio en Python (app.py) como respaldo sin conexión. Se verificó que ambas producen las mismas "
-  "probabilidades que PyTorch (diferencia máxima 1.8e-7 en ONNX) y las mismas métricas en test_ciego (99.38 %, matriz 596/4/1/199).")
+  "probabilidades que PyTorch (diferencia máxima 1.8e-7 en ONNX) y las mismas métricas en test_ciego (" + pc(H["cnn_ensemble_tta"]["accuracy"]) + ", matriz " + "/".join(str(v) for r in H["cnn_ensemble_tta"]["cm"] for v in r) + ").")
 B("«Abrir carpeta de test» → carga recursiva de PNG/JPG/TIF/BMP de cualquier tamaño (se redimensionan a 80×80).", "Carga: ")
 B("inmediata con el modelo elegido (CNN ensamble final, CNN dev o SVM+descriptores), TTA configurable y umbral ajustable; "
   "se reporta el tiempo total y por imagen.", "Inferencia: ")

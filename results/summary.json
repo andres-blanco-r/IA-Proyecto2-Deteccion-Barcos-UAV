@@ -4,14 +4,14 @@
     98.78133768000502
   ],
   "mcnemar": {
-    "svm_ok_cnn_err": 3,
+    "svm_ok_cnn_err": 6,
     "svm_err_cnn_ok": 3,
-    "p_value_exact": 1.0
+    "p_value_exact": 0.5078125
   },
-  "holdout_final_acc": 0.99375,
+  "holdout_final_acc": 0.99,
   "holdout_final_ci95": [
-    0.9854531417444686,
-    0.9973275453958835
+    0.9803921568627451,
+    0.9949243731600853
   ],
   "baseline_holdout_acc": 0.89625,
   "classic_holdout_acc": 0.99375

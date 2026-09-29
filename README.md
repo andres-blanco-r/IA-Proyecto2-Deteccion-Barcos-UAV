@@ -18,7 +18,9 @@ Fuente en `docs/` (publicada en la rama `gh-pages`); `python export_onnx.py` reg
 |---|---|---|
 | Baseline: píxeles + Regresión logística | 91.12 ± 1.00 % | 89.62 % |
 | SVM-RBF + HOG + LBP (GridSearchCV) | 99.44 ± 0.21 % | 99.38 % |
-| **CNN ShipNet-Lite (w=0.5) ensamble ×5 + TTA** | **99.28 ± 0.08 %** | **99.38 %** (IC95 % 98.55–99.73) |
+| **CNN ShipNet-Lite v2 (w=0.5, aumento de dominio) ensamble ×5 + TTA** | **99.38 ± 0.26 %** | **99.00 %** (IC95 % 98.04–99.49) |
+
+**Validación externa (TestSet2, 40 imágenes de otra fuente, nunca usadas para entrenar):** el modelo v1 bajaba a 82.5 %; el v2 con aumento de dominio (color del agua, saturación, gamma, escala, nitidez) llega a 95 % (`domain_shift.py`, `domain_capacity.py`, `retrain_domain.py`).
 
 La CNN con aumento de datos mantiene 99.25 % con rotación arbitraria y 97.25 % con perturbación combinada
 (el SVM cae a ~77 % con desenfoque/JPEG) → se despliega la CNN. Latencia CPU 1 hilo: 5.4 ms/img.

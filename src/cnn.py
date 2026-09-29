@@ -22,8 +22,9 @@ def conv_bn(cin, cout):
 
 
 class ShipNetLite(nn.Module):
-    def __init__(self, width=1.0, dropout=0.3, depth=4):
+    def __init__(self, width=1.0, dropout=0.3, depth=4, norm="global"):
         super().__init__()
+        self.norm = norm
         chs = [max(8, int(c * width)) for c in (32, 64, 128, 256)][:depth]
         layers, cin = [], 3
         for c in chs:                       # 80 -> 40 -> 20 -> 10 -> 5
@@ -32,9 +33,14 @@ class ShipNetLite(nn.Module):
         self.features = nn.Sequential(*layers)
         self.head = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten(),
                                   nn.Dropout(dropout), nn.Linear(cin, 2))
-        self.cfg = dict(width=width, dropout=dropout, depth=depth)
+        self.cfg = dict(width=width, dropout=dropout, depth=depth, norm=norm)
 
     def forward(self, x):
+        if self.norm == "instance":
+            # estandarización por imagen y canal: el modelo no depende del color/brillo absoluto del agua
+            m = x.mean(dim=(2, 3), keepdim=True)
+            sd = x.std(dim=(2, 3), keepdim=True)
+            x = (x - m) / (sd + 1e-3)
         return self.head(self.features(x))
 
 
@@ -44,8 +50,10 @@ def to_tensor(X):
     return (t - MEAN) / STD
 
 
-def augment(x):
-    """Aumento de datos en GPU. Imágenes cenitales => invariancia a rotación/espejo."""
+def augment(x, domain=False):
+    """Aumento de datos en GPU. Imágenes cenitales => invariancia a rotación/espejo.
+    domain=True añade variaciones de sensor/fuente (color del agua, saturación, gamma, escala, nitidez)
+    para generalizar a imágenes de otras fuentes (p. ej. Google Earth) distintas de Planet/ShipsNet."""
     n = x.shape[0]
     k = np.random.randint(4)
     x = torch.rot90(x, k, dims=(2, 3))
@@ -54,11 +62,26 @@ def augment(x):
     # rotación/traslación leve por muestra (affine)
     ang = (torch.rand(n, device=x.device) - 0.5) * (np.pi / 6)
     tx = (torch.rand(n, 2, device=x.device) - 0.5) * 0.15
-    cos, sin = torch.cos(ang), torch.sin(ang)
+    sc = torch.exp((torch.rand(n, device=x.device) - 0.5) * 0.6) if domain else torch.ones(n, device=x.device)
+    cos, sin = torch.cos(ang) * sc, torch.sin(ang) * sc     # sc<1 acerca (barco más grande), sc>1 aleja
     theta = torch.stack([torch.stack([cos, -sin, tx[:, 0]], 1),
                          torch.stack([sin, cos, tx[:, 1]], 1)], 1)
     grid = F.affine_grid(theta, x.shape, align_corners=False)
     x = F.grid_sample(x, grid, padding_mode="reflection", align_corners=False)
+    if domain:
+        dev = x.device
+        z = (x * STD.to(dev) + MEAN.to(dev)).clamp(0, 1)           # a RGB [0,1]
+        gain = 1 + (torch.rand(n, 3, 1, 1, device=dev) - 0.5) * 0.8  # tinte por canal (agua azul/verde/café)
+        z = z * gain
+        g = z.mean(1, keepdim=True)
+        sat = torch.rand(n, 1, 1, 1, device=dev) * 1.4 + 0.3          # saturación 0.3..1.7
+        z = (g + (z - g) * sat).clamp(0, 1)
+        gam = torch.exp((torch.rand(n, 1, 1, 1, device=dev) - 0.5) * 1.0)
+        z = z.clamp_min(1e-4) ** gam                                  # gamma (agua oscura / clara)
+        blur = F.avg_pool2d(F.pad(z, (1, 1, 1, 1), mode="replicate"), 3, 1)
+        k = (torch.rand(n, 1, 1, 1, device=dev) - 0.4) * 2.0          # <0 enfoca (nitidez), >0 desenfoca
+        z = (z + (blur - z) * k.clamp(-0.8, 1.0)).clamp(0, 1)
+        x = (z - MEAN.to(dev)) / STD.to(dev)
     # brillo / contraste / ruido (condiciones atmosféricas y de sensor del dron)
     b = (torch.rand(n, 1, 1, 1, device=x.device) - 0.5) * 0.6
     c = 1 + (torch.rand(n, 1, 1, 1, device=x.device) - 0.5) * 0.4
@@ -68,9 +91,10 @@ def augment(x):
 
 
 def train_model(Xtr, ytr, Xva=None, yva=None, width=1.0, dropout=0.3, lr=3e-3, wd=5e-4,
-                epochs=30, batch=128, aug=True, smoothing=0.05, seed=0, verbose=False):
+                epochs=30, batch=128, aug=True, smoothing=0.05, seed=0, verbose=False, norm="global"):
+    """aug: False | True (base) | "domain" (base + variaciones de fuente/sensor)."""
     torch.manual_seed(seed); np.random.seed(seed)
-    model = ShipNetLite(width, dropout).to(DEVICE)
+    model = ShipNetLite(width, dropout, norm=norm).to(DEVICE)
     xt = to_tensor(Xtr).to(DEVICE); yt = torch.from_numpy(ytr).to(DEVICE)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
     steps = int(np.ceil(len(xt) / batch))
@@ -85,7 +109,7 @@ def train_model(Xtr, ytr, Xva=None, yva=None, width=1.0, dropout=0.3, lr=3e-3, w
             idx = perm[i * batch:(i + 1) * batch]
             xb, yb = xt[idx], yt[idx]
             if aug:
-                xb = augment(xb)
+                xb = augment(xb, domain=(aug == "domain"))
             loss = crit(model(xb), yb)
             opt.zero_grad(set_to_none=True); loss.backward(); opt.step(); sched.step()
             tl += loss.item() * len(idx)
