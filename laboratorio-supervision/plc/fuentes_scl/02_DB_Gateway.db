@@ -1,0 +1,64 @@
+﻿// ARCHIVO GENERADO por herramientas/gen_db_gateway.py desde gateway/scada_gateway/layout.py
+// NO lo edite a mano: si cambia el layout, vuelva a generarlo e impórtelo de nuevo.
+// Acceso NO optimizado: el gateway Python lo lee por dirección absoluta (snap7).
+// Tamaño: 166 bytes. Zona escrita por el gateway: bytes 154..165.
+// Después de generarlo asígnele el número 100 (o el que ponga en config.toml).
+DATA_BLOCK "DB_Gateway"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 0.1
+NON_RETAIN
+   STRUCT 
+      PV_Temp             : Real;   // +0   PLC escribe: Temperatura medida [°C]
+      SP_Temp             : Real;   // +4   PLC escribe: Set point de temperatura [°C]
+      Error_Temp          : Real;   // +8   PLC escribe: Error SP - PV [°C]
+      Senal_mA            : Real;   // +12  PLC escribe: Corriente del lazo 4-20 mA [mA]
+      Duty_Calefactor_pct : Real;   // +16  PLC escribe: Ciclo de trabajo del calefactor (media móvil 60 s) [%]
+      TiempoEnBanda_pct   : Real;   // +20  PLC escribe: Tiempo del turno con |e| <= tolerancia de calidad [%]
+      VelRef_pct          : Real;   // +24  PLC escribe: Referencia de velocidad enviada al variador [%]
+      Vel_pct             : Real;   // +28  PLC escribe: Velocidad real del variador [%]
+      Vel_rpm             : Real;   // +32  PLC escribe: Velocidad real del motor [rpm]
+      ProgresoLote_pct    : Real;   // +36  PLC escribe: Avance del lote en fermentación [%]
+      Energia_kWh         : Real;   // +40  PLC escribe: Energía consumida en el turno [kWh]
+      Costo_Energia       : Real;   // +44  PLC escribe: Costo de la energía [COP]
+      Leche_L             : Real;   // +48  PLC escribe: Leche consumida [L]
+      Cultivo_g           : Real;   // +52  PLC escribe: Cultivo láctico consumido [g]
+      Azucar_kg           : Real;   // +56  PLC escribe: Azúcar consumida [kg]
+      Costo_Materiales    : Real;   // +60  PLC escribe: Costo de materias primas y envases [COP]
+      T_Turno_h           : Real;   // +64  PLC escribe: Tiempo de turno [h]
+      T_Muerto_h          : Real;   // +68  PLC escribe: Tiempo muerto (parado/emergencia/falla) [h]
+      Costo_Paradas       : Real;   // +72  PLC escribe: Costo del tiempo muerto [COP]
+      Ingresos            : Real;   // +76  PLC escribe: Ingresos por ventas [COP]
+      Utilidad            : Real;   // +80  PLC escribe: Ingresos - costos [COP]
+      Margen_pct          : Real;   // +84  PLC escribe: Margen sobre ventas [%]
+      OEE_pct             : Real;   // +88  PLC escribe: OEE = D x R x C [%]
+      Disponibilidad_pct  : Real;   // +92  PLC escribe: Disponibilidad [%]
+      Rendimiento_pct     : Real;   // +96  PLC escribe: Rendimiento [%]
+      Calidad_pct         : Real;   // +100 PLC escribe: Calidad (lotes buenos / lotes) [%]
+      Costo_Unitario      : Real;   // +104 PLC escribe: Costo variable por unidad buena [COP/und]
+      kWh_por_Unidad      : Real;   // +108 PLC escribe: Energía específica [kWh/und]
+      Lotes_Total         : DInt;   // +112 PLC escribe: Lotes terminados
+      Lotes_Buenos        : DInt;   // +116 PLC escribe: Lotes conformes
+      Lotes_Rechazados    : DInt;   // +120 PLC escribe: Lotes rechazados por calidad
+      Unidades_Producidas : DInt;   // +124 PLC escribe: Vasos producidos (conformes)
+      Unidades_Vendidas   : DInt;   // +128 PLC escribe: Vasos vendidos
+      Inventario_Und      : DInt;   // +132 PLC escribe: Inventario de producto terminado [und]
+      Envases_Usados      : DInt;   // +136 PLC escribe: Envases consumidos [und]
+      Estado              : Int;   // +140 PLC escribe: 0 Parado, 1 Calentando, 2 En consigna, 3 Emergencia, 4 Falla
+      Sentido             : Int;   // +142 PLC escribe: 1 adelante, -1 reversa, 0 detenido
+      Bits_Estado         : Word;   // +144 PLC escribe: Ver BITS_ESTADO
+      Alarmas             : Word;   // +146 PLC escribe: Ver BITS_ALARMA
+      ReqCnt_RepLocal     : Int;   // +148 PLC escribe: Contador de solicitudes de reporte local (PC)
+      ReqCnt_RepNubeSup   : Int;   // +150 PLC escribe: Contador de solicitudes de reporte supervisor en la nube
+      ReqCnt_RepNubeGer   : Int;   // +152 PLC escribe: Contador de solicitudes de reporte de gerencia en la nube
+      GW_Heartbeat        : Int;   // +154 GATEWAY escribe: Latido del gateway (cambia en cada ciclo)
+      GW_EstadoNube       : Int;   // +156 GATEWAY escribe: 0 sin nube, 1 nube OK, 2 error de nube
+      AckCnt_RepLocal     : Int;   // +158 GATEWAY escribe: Último reporte local atendido
+      AckCnt_RepNubeSup   : Int;   // +160 GATEWAY escribe: Último reporte supervisor atendido
+      AckCnt_RepNubeGer   : Int;   // +162 GATEWAY escribe: Último reporte gerencia atendido
+      GW_Pendientes       : Int;   // +164 GATEWAY escribe: Filas pendientes de subir a la nube
+   END_STRUCT;
+
+
+BEGIN
+
+END_DATA_BLOCK

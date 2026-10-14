@@ -1,0 +1,79 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Panel de gerencia</title><style>
+:root{--bg:#d6d6d6;--panel:#e6e6e6;--borde:#9a9a9a;--txt:#1d1d1d;--suave:#5c5c5c;--valor:#0b2e59;
+--on:#3b3b3b;--off:#f7f7f7;--alta:#d40000;--media:#f0b400;--baja:#e07000;--ok:#2f6b3a}
+*{box-sizing:border-box}body{margin:0;background:#bdbdbd;font-family:Arial,Helvetica,sans-serif;color:var(--txt)}
+.pantalla{width:1280px;height:800px;background:var(--bg);display:grid;grid-template-rows:56px 1fr 34px;overflow:hidden}
+.top{display:flex;align-items:center;gap:14px;padding:0 14px;background:#c4c4c4;border-bottom:1px solid var(--borde)}
+.top h1{font-size:18px;margin:0;font-weight:bold}.top .sub{font-size:12px;color:var(--suave)}
+.nav{margin-left:auto;display:flex;gap:6px}.nav span{padding:7px 14px;border:1px solid var(--borde);background:var(--panel);font-size:13px}
+.nav span.act{background:#7a7a7a;color:#fff;border-color:#5a5a5a}
+.estado-com{display:flex;gap:10px;font-size:12px}.led{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;border:1px solid #444;vertical-align:-1px}
+.led.ok{background:#9a9a9a}.led.mal{background:var(--alta)}
+.usr{font-size:12px;text-align:right;color:var(--suave)}
+.cuerpo{display:grid;gap:10px;padding:10px}
+.caja{background:var(--panel);border:1px solid var(--borde);padding:10px;position:relative}
+.caja h2{font-size:13px;margin:0 0 8px;color:var(--suave);text-transform:uppercase;letter-spacing:.04em}
+.valor{font-size:40px;font-weight:bold;color:var(--valor)}.unid{font-size:16px;color:var(--suave);margin-left:4px}
+.fila{display:flex;justify-content:space-between;font-size:14px;padding:4px 0;border-bottom:1px dotted #bdbdbd}
+.fila b{color:var(--valor)}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 16px;border:1px solid #5a5a5a;
+background:linear-gradient(#f2f2f2,#d0d0d0);font-weight:bold;font-size:14px;border-radius:3px;min-width:110px}
+.btn.marcha{background:linear-gradient(#e9f2ea,#c7d9c9);border-color:#2f6b3a}
+.btn.paro{background:linear-gradient(#5a5a5a,#2e2e2e);color:#fff}
+.btn.sel{background:#7a7a7a;color:#fff}
+.emerg{width:96px;height:96px;border-radius:50%;background:var(--media);display:flex;align-items:center;justify-content:center;border:2px solid #8a6a00}
+.emerg span{width:70px;height:70px;border-radius:50%;background:var(--alta);color:#fff;font-size:11px;font-weight:bold;display:flex;align-items:center;justify-content:center;text-align:center;border:2px solid #7a0000}
+.barra{position:relative;height:26px;background:#fff;border:1px solid var(--borde);margin:6px 0 2px}
+.barra .normal{position:absolute;top:0;bottom:0;background:#c9c9c9}
+.barra .pv{position:absolute;top:-4px;bottom:-4px;width:4px;background:var(--valor)}
+.barra .sp{position:absolute;top:-8px;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:9px solid #000;transform:translateX(-7px)}
+.escala{display:flex;justify-content:space-between;font-size:11px;color:var(--suave)}
+.prog{height:16px;background:#fff;border:1px solid var(--borde)}.prog div{height:100%;background:#8c8c8c}
+.alarmas{display:flex;align-items:center;gap:12px;padding:0 12px;background:#cfcfcf;border-top:1px solid var(--borde);font-size:13px}
+.alarmas .tag{padding:3px 8px;font-weight:bold}.p1{background:var(--alta);color:#fff}.p2{background:var(--media)}.p3{background:var(--baja);color:#fff}
+.chip{display:inline-block;padding:3px 8px;border:1px solid var(--borde);background:#f2f2f2;font-size:12px;margin:2px}
+.chip.on{background:var(--on);color:#fff}
+table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:4px 6px;border-bottom:1px solid #c9c9c9;text-align:left}th{color:var(--suave);font-weight:normal}
+td.n{text-align:right;color:var(--valor);font-weight:bold;white-space:nowrap}
+.kpi{display:flex;flex-direction:column;align-items:flex-start}.kpi .valor{font-size:34px}
+.nota{font-size:11px;color:var(--suave)}
+</style></head>
+<body><div class="pantalla">
+<div class="top"><div><h1>Incubadora de yogur · Línea 1</h1><div class="sub">Panel de gerencia</div></div>
+<div class="estado-com"><span><i class="led ok"></i>PLC</span><span><i class="led ok"></i>Variador</span><span><i class="led ok"></i>Gateway</span><span><i class="led ok"></i>Nube</span></div>
+<div class="nav"><span class="">Operador</span><span class="">Supervisor</span><span class="act">Gerencia</span></div><div class="usr">Usuario: <b>gerente1 (Gerencia)</b><br>2026-10-14 10:42:07</div></div>
+<div class="cuerpo" style="grid-template-columns:repeat(4,1fr);grid-template-rows:180px 1fr 170px">
+<div class="caja kpi"><h2>OEE</h2><div><span class="valor" style="font-size:30px">80,6</span><span class="unid">%</span></div><div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:95px;font-size:12px">Disponibilidad</span><div class="prog" style="width:150px"><div style="width:96%"></div></div><b style="font-size:12px;white-space:nowrap">95,5 %</b></div><div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:95px;font-size:12px">Rendimiento</span><div class="prog" style="width:150px"><div style="width:84%"></div></div><b style="font-size:12px;white-space:nowrap">84,4 %</b></div><div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:95px;font-size:12px">Calidad</span><div class="prog" style="width:150px"><div style="width:100%"></div></div><b style="font-size:12px;white-space:nowrap">100,0 %</b></div></div>
+<div class="caja kpi"><h2>Margen sobre ventas</h2><div><span class="valor">67,7</span><span class="unid">%</span></div>
+<p class="nota">Utilidad: $ 7.413.124</p></div>
+<div class="caja kpi"><h2>Costo unitario</h2><div><span class="valor">1.214</span><span class="unid">COP/vaso</span></div>
+<p class="nota">Precio de venta: $ 3.800</p></div>
+<div class="caja kpi"><h2>Energía específica</h2><div><span class="valor">1,7</span><span class="unid">Wh/vaso</span></div>
+<p class="nota">Total: 4,84 kWh</p></div>
+<div class="caja" style="grid-column:1/2"><h2>Material utilizado</h2><table>
+<tr><th>Material</th><th>Cantidad</th><th>Costo</th></tr>
+<tr><td>Leche</td><td class="n">580 L</td><td class="n">$ 1.856.000</td></tr>
+<tr><td>Cultivo láctico</td><td class="n">145 g</td><td class="n">$ 435.000</td></tr>
+<tr><td>Azúcar</td><td class="n">46,4 kg</td><td class="n">$ 208.800</td></tr>
+<tr><td>Envases</td><td class="n">2900</td><td class="n">$ 1.015.000</td></tr>
+<tr><td><b>Total materiales</b></td><td></td><td class="n">$ 3.514.800</td></tr></table></div>
+<div class="caja"><h2>Producción e inventario</h2><table>
+<tr><td>Lotes buenos / rechazados</td><td class="n">29 / 0</td></tr>
+<tr><td>Vasos producidos</td><td class="n">2900</td></tr>
+<tr><td>Inventario producto terminado</td><td class="n">20</td></tr>
+<tr><td>Vasos vendidos</td><td class="n">2880</td></tr>
+<tr><td>Ingresos por ventas</td><td class="n">$ 10.944.000</td></tr></table></div>
+<div class="caja"><h2>Tiempos muertos</h2><table>
+<tr><td>Tiempo de turno</td><td class="n">3,00 h</td></tr>
+<tr><td>Tiempo muerto</td><td class="n">8,1 min</td></tr>
+<tr><td>Costo del tiempo muerto</td><td class="n">$ 11.475</td></tr>
+<tr><td>Costo hora de parada</td><td class="n">$ 85.000</td></tr></table></div>
+<div class="caja"><h2>Acciones de gerencia</h2>
+<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span>Venta:</span><b style="border:1px solid #9a9a9a;background:#fff;padding:6px 12px">10</b><span class="btn">REGISTRAR VENTA</span></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><span class="btn">REPORTE EN LA NUBE</span><span class="btn">REINICIAR TURNO</span><span class="btn sel">DEMANDA AUTO</span></div></div>
+<div class="caja" style="grid-column:1/3"><h2>Ingresos vs costos del turno</h2><div style="display:flex;align-items:center;gap:8px;margin:5px 0"><span style="width:110px;font-size:12px">Ingresos</span><div style="height:18px;width:300px;background:#0b2e59"></div><span style="font-size:12px">$ 10.944.000</span></div><div style="display:flex;align-items:center;gap:8px;margin:5px 0"><span style="width:110px;font-size:12px">Materiales</span><div style="height:18px;width:96px;background:#8c8c8c"></div><span style="font-size:12px">$ 3.514.800</span></div><div style="display:flex;align-items:center;gap:8px;margin:5px 0"><span style="width:110px;font-size:12px">Energía</span><div style="height:18px;width:2px;background:#8c8c8c"></div><span style="font-size:12px">$ 4.601</span></div><div style="display:flex;align-items:center;gap:8px;margin:5px 0"><span style="width:110px;font-size:12px">Tiempo muerto</span><div style="height:18px;width:2px;background:#e07000"></div><span style="font-size:12px">$ 11.475</span></div></div>
+<div class="caja" style="grid-column:3/5"><h2>Costos parametrizables (DB_Param.Costos)</h2>
+<p class="nota" style="font-size:13px">Precio de venta, costo de leche, cultivo, azúcar, envase, kWh y hora de parada se editan aquí con campos de E/S
+(permiso «Gerencia»). Cada grupo debe usar sus propios valores.</p></div></div>
+<div class="alarmas"><b>Alarmas activas: 1</b> <span class="tag p3">Inventario de producto bajo</span><span style="margin-left:auto" class="nota">Alarma: rojo = alta · amarillo = media · naranja = baja (ISA-18.2 / ISA-101)</span></div>
+</div></body></html>

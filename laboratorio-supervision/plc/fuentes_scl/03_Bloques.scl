@@ -1,0 +1,932 @@
+﻿// =====================================================================================
+//  Laboratorio de Supervisión - Automatización Industrial (UMNG)
+//  Bloques de programa (SCL, S7-1500). Importar DESPUÉS de los DB globales.
+//  TIA Portal: Fuentes externas > Agregar archivo > clic derecho > "Generar bloques a partir de fuente".
+//  El gemelo en Python de esta lógica está en gateway/scada_gateway/simulador.py.
+// =====================================================================================
+
+// -------------------------------------------------------------------------------------
+// FC_EscalarRTD: lazo 4-20 mA (XTR105 + R de carga) -> temperatura.
+// Con R_Shunt = 250 ohm el lazo da 1..5 V. Configure el canal analógico en "1..5 V"
+// (AI_Vmin = 1, AI_Vmax = 5) o en "0..10 V" (AI_Vmin = 0, AI_Vmax = 10).
+// Falla según NAMUR NE43: < 3.6 mA (lazo abierto) o > 21 mA (cortocircuito).
+// -------------------------------------------------------------------------------------
+FUNCTION "FC_EscalarRTD" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      Raw : Int;             // Valor del canal analógico (0..27648 = rango nominal)
+      V_Min : Real;          // Voltios en 0 cuentas
+      V_Max : Real;          // Voltios en 27648 cuentas
+      R_Shunt : Real;        // Resistencia de carga [ohm]
+      T_Min : Real;          // Temperatura a 4 mA [°C]
+      T_Max : Real;          // Temperatura a 20 mA [°C]
+   END_VAR
+
+   VAR_OUTPUT
+      Temperatura : Real;    // [°C]
+      Corriente_mA : Real;   // [mA]
+      Falla : Bool;
+   END_VAR
+
+   VAR_TEMP
+      v : Real;
+   END_VAR
+
+
+BEGIN
+	#v := INT_TO_REAL(#Raw) / 27648.0 * (#V_Max - #V_Min) + #V_Min;
+	#Corriente_mA := #v / #R_Shunt * 1000.0;
+	#Temperatura := (#Corriente_mA - 4.0) / 16.0 * (#T_Max - #T_Min) + #T_Min;
+	// 32767 / -32768 = desbordamiento o rotura de hilo reportados por el módulo
+	#Falla := (#Corriente_mA < 3.6) OR (#Corriente_mA > 21.0) OR (#Raw = 32767) OR (#Raw = -32768);
+END_FUNCTION
+
+// -------------------------------------------------------------------------------------
+// FB_OnOffHist: control ON-OFF con histéresis (genérico: temperatura o nivel).
+//   Acción directa (AccionInversa = FALSE): ON si PV < SP - H/2, OFF si PV > SP + H/2.
+// -------------------------------------------------------------------------------------
+FUNCTION_BLOCK "FB_OnOffHist"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      PV : Real;
+      SP : Real;
+      Histeresis : Real;     // Banda total
+      Habilitar : Bool;
+      AccionInversa : Bool;  // TRUE para enfriar / vaciar
+   END_VAR
+
+   VAR_OUTPUT
+      Salida : Bool;
+   END_VAR
+
+   VAR_TEMP
+      e : Real;
+   END_VAR
+
+
+BEGIN
+	IF NOT #Habilitar THEN
+	    #Salida := FALSE;
+	    RETURN;
+	END_IF;
+
+	IF #AccionInversa THEN
+	    #e := #PV - #SP;
+	ELSE
+	    #e := #SP - #PV;
+	END_IF;
+
+	IF #e > #Histeresis / 2.0 THEN
+	    #Salida := TRUE;
+	ELSIF #e < -#Histeresis / 2.0 THEN
+	    #Salida := FALSE;
+	END_IF;
+	// Dentro de la banda la salida conserva su valor (memoria del FB)
+END_FUNCTION_BLOCK
+
+// -------------------------------------------------------------------------------------
+// FB_VelocidadVariador: la velocidad del agitador sigue el progreso de la temperatura.
+//   * Lejos del SP (|e| >= ErrorVelMax) gira a Vmax.
+//   * Al acercarse baja linealmente hasta Vmin.
+//   * Al alcanzar el SP (|e| <= TolConsigna) se detiene y queda detenido mientras
+//     el ON-OFF oscila alrededor del SP; solo vuelve a girar si |e| > BandaReinicio
+//     (p. ej. cambio de SP o perturbación grande).
+// -------------------------------------------------------------------------------------
+FUNCTION_BLOCK "FB_VelocidadVariador"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      PV : Real;
+      SP : Real;
+      Habilitar : Bool;
+      TolConsigna : Real;
+      BandaReinicio : Real;
+      ErrorVelMax : Real;
+      Vmin_pct : Real;
+      Vmax_pct : Real;
+      ModoManual : Bool;
+      VelManual_pct : Real;
+   END_VAR
+
+   VAR_OUTPUT
+      VelRef_pct : Real;
+      ConsignaAlcanzada : Bool;
+   END_VAR
+
+   VAR_TEMP
+      absE : Real;
+      frac : Real;
+   END_VAR
+
+
+BEGIN
+	#absE := ABS(#SP - #PV);
+
+	IF NOT #Habilitar THEN
+	    #ConsignaAlcanzada := FALSE;
+	    #VelRef_pct := 0.0;
+	    RETURN;
+	END_IF;
+
+	IF #absE <= #TolConsigna THEN
+	    #ConsignaAlcanzada := TRUE;
+	ELSIF #absE > #BandaReinicio THEN
+	    #ConsignaAlcanzada := FALSE;
+	END_IF;
+
+	IF #ModoManual THEN
+	    #VelRef_pct := LIMIT(MN := 0.0, IN := #VelManual_pct, MX := 100.0);
+	ELSIF #ConsignaAlcanzada THEN
+	    #VelRef_pct := 0.0;
+	ELSE
+	    #frac := LIMIT(MN := 0.0, IN := #absE / MAX(IN1 := #ErrorVelMax, IN2 := 0.1), MX := 1.0);
+	    #VelRef_pct := #Vmin_pct + (#Vmax_pct - #Vmin_pct) * #frac;
+	END_IF;
+END_FUNCTION_BLOCK
+
+// -------------------------------------------------------------------------------------
+// FB_G120_Telegrama1: SINAMICS G120 por PROFINET con "Telegrama estándar 1"
+//   Salidas PLC -> variador: STW1 (palabra de mando), NSOLL_A (consigna, 16#4000 = 100 % de p2000)
+//   Entradas variador -> PLC: ZSW1 (palabra de estado), NIST_A (velocidad real, misma escala)
+//   STW1 = 16#047E  OFF1 (listo, parada por rampa)
+//   STW1 = 16#047F  ON (marcha)
+//   STW1 = 16#04FE  acuse de fallas (bit 7, se detecta por flanco)
+//   El sentido de giro se da con el signo de la consigna.
+// -------------------------------------------------------------------------------------
+FUNCTION_BLOCK "FB_G120_Telegrama1"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      Marcha : Bool;
+      Reversa : Bool;
+      VelRef_pct : Real;       // 0..100 %
+      AckFalla : Bool;
+      VelNominal_rpm : Real;   // p2000
+      ZSW1 : Word;
+      NIST_A : Int;
+   END_VAR
+
+   VAR_OUTPUT
+      STW1 : Word;
+      NSOLL_A : Int;
+      Listo : Bool;            // ZSW1 bits 0 y 1
+      EnMarcha : Bool;         // ZSW1 bit 2 (servicio habilitado)
+      Falla : Bool;            // ZSW1 bit 3
+      Advertencia : Bool;      // ZSW1 bit 7
+      Vel_pct : Real;          // |velocidad real| [%]
+      Vel_rpm : Real;          // |velocidad real| [rpm]
+      Sentido : Int;           // 1 adelante, -1 reversa, 0 detenido
+   END_VAR
+
+   VAR
+      tpAck : TP_TIME;
+   END_VAR
+
+   VAR_TEMP
+      ref : Real;
+      velConSigno : Real;
+   END_VAR
+
+
+BEGIN
+	#tpAck(IN := #AckFalla, PT := T#500MS);
+
+	#Listo := #ZSW1.%X0 AND #ZSW1.%X1;
+	#EnMarcha := #ZSW1.%X2;
+	#Falla := #ZSW1.%X3;
+	#Advertencia := #ZSW1.%X7;
+
+	IF #tpAck.Q THEN
+	    #STW1 := 16#04FE;
+	ELSIF #Marcha AND NOT #Falla THEN
+	    #STW1 := 16#047F;
+	ELSE
+	    #STW1 := 16#047E;
+	END_IF;
+
+	#ref := LIMIT(MN := 0.0, IN := #VelRef_pct, MX := 100.0);
+	IF #Reversa THEN
+	    #ref := -#ref;
+	END_IF;
+	#NSOLL_A := REAL_TO_INT(#ref * 16384.0 / 100.0);
+
+	#velConSigno := INT_TO_REAL(#NIST_A) * 100.0 / 16384.0;
+	IF ABS(#velConSigno) < 0.5 THEN
+	    #Sentido := 0;
+	ELSIF #velConSigno > 0.0 THEN
+	    #Sentido := 1;
+	ELSE
+	    #Sentido := -1;
+	END_IF;
+	#Vel_pct := ABS(#velConSigno);
+	#Vel_rpm := #Vel_pct * #VelNominal_rpm / 100.0;
+END_FUNCTION_BLOCK
+
+// -------------------------------------------------------------------------------------
+// FB_SimPlanta: modelo térmico de 2 nodos para probar en PLCSIM sin la planta.
+//   C_placa dTp/dt = P*u - (Tp - Tc)/R_placa
+//   C_cam   dTc/dt = (Tp - Tc)/R_placa - (Tc - Tamb)/R_cam
+//   tau_s   dTs/dt = Tc - Ts     (vaina de la RTD)
+// -------------------------------------------------------------------------------------
+FUNCTION_BLOCK "FB_SimPlanta"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      Calefactor : Bool;
+      dt : Real;               // [s]
+      Potencia_W : Real;
+      C_Placa : Real;
+      R_Placa : Real;
+      C_Camara : Real;
+      R_Camara : Real;
+      T_Amb : Real;
+      Tau_Sensor : Real;
+   END_VAR
+
+   VAR_OUTPUT
+      T_Sensor : Real;
+   END_VAR
+
+   VAR
+      T_Placa : Real;
+      T_Camara : Real;
+      Iniciado : Bool;
+   END_VAR
+
+   VAR_TEMP
+      p : Real;
+      qPC : Real;
+      qCA : Real;
+   END_VAR
+
+
+BEGIN
+	IF NOT #Iniciado THEN
+	    #T_Placa := #T_Amb;
+	    #T_Camara := #T_Amb;
+	    #T_Sensor := #T_Amb;
+	    #Iniciado := TRUE;
+	END_IF;
+
+	IF #Calefactor THEN
+	    #p := #Potencia_W;
+	ELSE
+	    #p := 0.0;
+	END_IF;
+
+	#qPC := (#T_Placa - #T_Camara) / #R_Placa;
+	#qCA := (#T_Camara - #T_Amb) / #R_Camara;
+	#T_Placa := #T_Placa + #dt * (#p - #qPC) / #C_Placa;
+	#T_Camara := #T_Camara + #dt * (#qPC - #qCA) / #C_Camara;
+	#T_Sensor := #T_Sensor + #dt * (#T_Camara - #T_Sensor) / MAX(IN1 := #Tau_Sensor, IN2 := 0.1);
+END_FUNCTION_BLOCK
+
+// -------------------------------------------------------------------------------------
+// FB_SimVariador: emula el G120 (rampa y palabra de estado) para PLCSIM.
+// -------------------------------------------------------------------------------------
+FUNCTION_BLOCK "FB_SimVariador"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      STW1 : Word;
+      NSOLL_A : Int;
+      dt : Real;
+      Rampa_s : Real;          // Tiempo de 0 a 100 %
+   END_VAR
+
+   VAR_OUTPUT
+      ZSW1 : Word;
+      NIST_A : Int;
+   END_VAR
+
+   VAR
+      vel : Real;              // En cuentas (16384 = 100 %)
+   END_VAR
+
+   VAR_TEMP
+      obj : Real;
+      paso : Real;
+      encendido : Bool;
+   END_VAR
+
+
+BEGIN
+	#encendido := #STW1.%X0;
+	IF #encendido THEN
+	    #obj := INT_TO_REAL(#NSOLL_A);
+	ELSE
+	    #obj := 0.0;
+	END_IF;
+	#paso := 16384.0 / MAX(IN1 := #Rampa_s, IN2 := 0.1) * #dt;
+	#vel := #vel + LIMIT(MN := -#paso, IN := #obj - #vel, MX := #paso);
+	#NIST_A := REAL_TO_INT(#vel);
+	#ZSW1 := 16#0003;              // listo para conexión + listo para servicio
+	#ZSW1.%X2 := #encendido;       // servicio habilitado
+END_FUNCTION_BLOCK
+
+// -------------------------------------------------------------------------------------
+// FB_Produccion: lotes, materiales, ventas, tiempos muertos, costos y KPI (OEE...).
+// Escribe en "DB_Produccion" (remanente) y lee los costos de "DB_Param".Costos.
+// -------------------------------------------------------------------------------------
+FUNCTION_BLOCK "FB_Produccion"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      dt : LReal;              // [s]
+      Estado : Int;
+      PV : Real;
+      SP : Real;
+      Calefactor : Bool;
+      ResetTurno : Bool;
+      RegistrarVenta : Bool;   // Pulso de un ciclo
+      CantidadVenta : DInt;
+      DemandaAuto : Bool;
+      TolCalidad : Real;
+      MaxFueraTol_s : Real;
+      T_Lote_s : Real;
+   END_VAR
+
+   VAR_OUTPUT
+      LoteTerminado : Bool;    // Pulso de un ciclo
+      LoteRechazado : Bool;    // Pulso de un ciclo
+   END_VAR
+
+   VAR_TEMP
+      enMarcha : Bool;
+      absE : Real;
+      q : DInt;
+      tOper : LReal;
+      disp : LReal;
+      rend : LReal;
+      cal : LReal;
+      cMat : LReal;
+      cEne : LReal;
+      cPar : LReal;
+      ingresos : LReal;
+      util : LReal;
+      lotes : LReal;
+   END_VAR
+
+
+BEGIN
+	#LoteTerminado := FALSE;
+	#LoteRechazado := FALSE;
+
+	REGION Reinicio de turno
+	    IF #ResetTurno THEN
+	        "DB_Produccion".TurnoActivo := FALSE;
+	        "DB_Produccion".RechazoPendiente := FALSE;
+	        "DB_Produccion".T_Turno_s := 0.0;
+	        "DB_Produccion".T_Muerto_s := 0.0;
+	        "DB_Produccion".T_Banda_s := 0.0;
+	        "DB_Produccion".T_Lote_s := 0.0;
+	        "DB_Produccion".T_FueraTol_s := 0.0;
+	        "DB_Produccion".T_Pedido_s := 0.0;
+	        "DB_Produccion".Energia_kWh := 0.0;
+	        "DB_Produccion".Lotes_Total := 0;
+	        "DB_Produccion".Lotes_Buenos := 0;
+	        "DB_Produccion".Lotes_Rechazados := 0;
+	        "DB_Produccion".Unidades := 0;
+	        "DB_Produccion".Vendidas := 0;
+	        "DB_Produccion".Inventario := 0;
+	        "DB_Produccion".Envases := 0;
+	    END_IF;
+	END_REGION
+
+	REGION Tiempos del turno
+	    #enMarcha := (#Estado = 1) OR (#Estado = 2);
+	    #absE := ABS(#SP - #PV);
+	    IF #enMarcha THEN
+	        "DB_Produccion".TurnoActivo := TRUE;
+	    END_IF;
+	    IF "DB_Produccion".TurnoActivo THEN
+	        "DB_Produccion".T_Turno_s := "DB_Produccion".T_Turno_s + #dt;
+	        IF NOT #enMarcha THEN
+	            // Parado, emergencia o falla dentro del turno = tiempo muerto
+	            "DB_Produccion".T_Muerto_s := "DB_Produccion".T_Muerto_s + #dt;
+	        ELSIF #absE <= #TolCalidad THEN
+	            "DB_Produccion".T_Banda_s := "DB_Produccion".T_Banda_s + #dt;
+	        END_IF;
+	    END_IF;
+	END_REGION
+
+	REGION Lotes - fermentacion en consigna
+	    IF #Estado = 2 THEN
+	        "DB_Produccion".T_Lote_s := "DB_Produccion".T_Lote_s + #dt;
+	        IF #absE > #TolCalidad THEN
+	            "DB_Produccion".T_FueraTol_s := "DB_Produccion".T_FueraTol_s + #dt;
+	        END_IF;
+	        IF "DB_Produccion".T_Lote_s >= REAL_TO_LREAL(#T_Lote_s) THEN
+	            "DB_Produccion".Lotes_Total := "DB_Produccion".Lotes_Total + 1;
+	            "DB_Produccion".Envases := "DB_Produccion".Envases + "DB_Param".Costos.UnidadesPorLote;
+	            IF "DB_Produccion".T_FueraTol_s <= REAL_TO_LREAL(#MaxFueraTol_s) THEN
+	                "DB_Produccion".Lotes_Buenos := "DB_Produccion".Lotes_Buenos + 1;
+	                "DB_Produccion".Unidades := "DB_Produccion".Unidades + "DB_Param".Costos.UnidadesPorLote;
+	                "DB_Produccion".Inventario := "DB_Produccion".Inventario + "DB_Param".Costos.UnidadesPorLote;
+	            ELSE
+	                "DB_Produccion".Lotes_Rechazados := "DB_Produccion".Lotes_Rechazados + 1;
+	                "DB_Produccion".RechazoPendiente := TRUE;
+	                #LoteRechazado := TRUE;
+	            END_IF;
+	            "DB_Produccion".T_Lote_s := 0.0;
+	            "DB_Produccion".T_FueraTol_s := 0.0;
+	            #LoteTerminado := TRUE;
+	        END_IF;
+	    END_IF;
+	END_REGION
+
+	REGION Energía
+	    IF #Calefactor THEN
+	        "DB_Produccion".Energia_kWh := "DB_Produccion".Energia_kWh
+	        + REAL_TO_LREAL("DB_Param".Costos.Potencia_Planta_kW) * #dt / 3600.0;
+	    END_IF;
+	END_REGION
+
+	REGION Ventas - manuales y demanda simulada
+	    IF #RegistrarVenta THEN
+	        #q := LIMIT(MN := 0, IN := #CantidadVenta, MX := "DB_Produccion".Inventario);
+	        "DB_Produccion".Inventario := "DB_Produccion".Inventario - #q;
+	        "DB_Produccion".Vendidas := "DB_Produccion".Vendidas + #q;
+	    END_IF;
+	    IF #DemandaAuto AND "DB_Produccion".TurnoActivo THEN
+	        "DB_Produccion".T_Pedido_s := "DB_Produccion".T_Pedido_s + #dt;
+	        IF "DB_Produccion".T_Pedido_s >= REAL_TO_LREAL("DB_Param".Costos.T_EntrePedidos_s) THEN
+	            "DB_Produccion".T_Pedido_s := 0.0;
+	            // Generador congruencial simple: número en [0, 1)
+	            "DB_Produccion".Semilla := FRAC("DB_Produccion".Semilla * 9821.0 + 0.211327);
+	            #q := 1 + REAL_TO_DINT("DB_Produccion".Semilla * DINT_TO_REAL("DB_Param".Costos.PedidoMax - 1));
+	            #q := MIN(IN1 := #q, IN2 := "DB_Produccion".Inventario);
+	            "DB_Produccion".Inventario := "DB_Produccion".Inventario - #q;
+	            "DB_Produccion".Vendidas := "DB_Produccion".Vendidas + #q;
+	        END_IF;
+	    END_IF;
+	END_REGION
+
+	REGION Costos y KPI
+	    #lotes := DINT_TO_LREAL("DB_Produccion".Lotes_Total);
+	    "DB_Produccion".Leche_L := LREAL_TO_REAL(#lotes * "DB_Param".Costos.Leche_L_Lote);
+	    "DB_Produccion".Cultivo_g := LREAL_TO_REAL(#lotes * "DB_Param".Costos.Cultivo_g_Lote);
+	    "DB_Produccion".Azucar_kg := LREAL_TO_REAL(#lotes * "DB_Param".Costos.Azucar_kg_Lote);
+	    #cMat := #lotes * ("DB_Param".Costos.Leche_L_Lote * "DB_Param".Costos.Precio_Leche_L
+	    + "DB_Param".Costos.Cultivo_g_Lote * "DB_Param".Costos.Precio_Cultivo_g
+	    + "DB_Param".Costos.Azucar_kg_Lote * "DB_Param".Costos.Precio_Azucar_kg)
+	    + DINT_TO_LREAL("DB_Produccion".Envases) * "DB_Param".Costos.Precio_Envase;
+	    #cEne := "DB_Produccion".Energia_kWh * "DB_Param".Costos.Precio_kWh;
+	    #cPar := "DB_Produccion".T_Muerto_s / 3600.0 * "DB_Param".Costos.CostoHoraParada;
+	    #ingresos := DINT_TO_LREAL("DB_Produccion".Vendidas) * "DB_Param".Costos.Precio_Venta_Und;
+	    #util := #ingresos - #cMat - #cEne - #cPar;
+
+	    #tOper := "DB_Produccion".T_Turno_s - "DB_Produccion".T_Muerto_s;
+	    IF "DB_Produccion".T_Turno_s > 0.0 THEN
+	        #disp := #tOper / "DB_Produccion".T_Turno_s;
+	    ELSE
+	        #disp := 0.0;
+	    END_IF;
+	    IF #tOper > 0.0 THEN
+	        #rend := MIN(IN1 := LREAL#1.0, IN2 := #lotes * "DB_Param".Costos.T_CicloIdeal_s / #tOper);
+	        "DB_Produccion".TiempoEnBanda_pct := LREAL_TO_REAL(100.0 * "DB_Produccion".T_Banda_s / #tOper);
+	    ELSE
+	        #rend := 0.0;
+	        "DB_Produccion".TiempoEnBanda_pct := 0.0;
+	    END_IF;
+	    IF "DB_Produccion".Lotes_Total > 0 THEN
+	        #cal := DINT_TO_LREAL("DB_Produccion".Lotes_Buenos) / #lotes;
+	    ELSE
+	        #cal := 1.0;
+	    END_IF;
+
+	    "DB_Produccion".Costo_Materiales := LREAL_TO_REAL(#cMat);
+	    "DB_Produccion".Costo_Energia := LREAL_TO_REAL(#cEne);
+	    "DB_Produccion".Costo_Paradas := LREAL_TO_REAL(#cPar);
+	    "DB_Produccion".Ingresos := LREAL_TO_REAL(#ingresos);
+	    "DB_Produccion".Utilidad := LREAL_TO_REAL(#util);
+	    IF #ingresos > 0.0 THEN
+	        "DB_Produccion".Margen_pct := LREAL_TO_REAL(100.0 * #util / #ingresos);
+	    ELSE
+	        "DB_Produccion".Margen_pct := 0.0;
+	    END_IF;
+	    "DB_Produccion".Disponibilidad_pct := LREAL_TO_REAL(100.0 * #disp);
+	    "DB_Produccion".Rendimiento_pct := LREAL_TO_REAL(100.0 * #rend);
+	    "DB_Produccion".Calidad_pct := LREAL_TO_REAL(100.0 * #cal);
+	    "DB_Produccion".OEE_pct := LREAL_TO_REAL(100.0 * #disp * #rend * #cal);
+	    IF "DB_Produccion".Unidades > 0 THEN
+	        "DB_Produccion".Costo_Unitario := LREAL_TO_REAL((#cMat + #cEne) / DINT_TO_LREAL("DB_Produccion".Unidades));
+	        "DB_Produccion".kWh_por_Unidad := LREAL_TO_REAL("DB_Produccion".Energia_kWh / DINT_TO_LREAL("DB_Produccion".Unidades));
+	    ELSE
+	        "DB_Produccion".Costo_Unitario := 0.0;
+	        "DB_Produccion".kWh_por_Unidad := 0.0;
+	    END_IF;
+	    "DB_Produccion".T_Turno_h := LREAL_TO_REAL("DB_Produccion".T_Turno_s / 3600.0);
+	    "DB_Produccion".T_Muerto_h := LREAL_TO_REAL("DB_Produccion".T_Muerto_s / 3600.0);
+	END_REGION
+END_FUNCTION_BLOCK
+
+// -------------------------------------------------------------------------------------
+// FB_Planta: programa principal del proceso.
+//   Estados: 0 PARADO, 1 CALENTANDO, 2 EN CONSIGNA (fermentación), 3 EMERGENCIA, 4 FALLA
+// -------------------------------------------------------------------------------------
+FUNCTION_BLOCK "FB_Planta"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR
+      instOnOff : "FB_OnOffHist";
+      instVel : "FB_VelocidadVariador";
+      instVFD : "FB_G120_Telegrama1";
+      instSimPlanta : "FB_SimPlanta";
+      instSimVFD : "FB_SimVariador";
+      instProd : "FB_Produccion";
+      tonEstab : TON_TIME;
+      tonAlta : TON_TIME;
+      tonBaja : TON_TIME;
+      tonGateway : TON_TIME;
+      memRuntime : LReal;
+      estado : Int;
+      pvFiltrada : Real;
+      calefactor : Bool;
+      vfdHabilitado : Bool;
+      paroHMI : Bool;
+      ultHeartbeat : Int;
+      duty : Real;
+      tParpadeo : Real;
+      parpadeo : Bool;
+   END_VAR
+
+   VAR_TEMP
+      dt : LReal;
+      dtR : Real;
+      pv : Real;
+      sp : Real;
+      absE : Real;
+      mA : Real;
+      u : Real;
+      fallaSensor : Bool;
+      start : Bool;
+      stop : Bool;
+      rearme : Bool;
+      emergencia : Bool;
+      cadenaAbierta : Bool;
+      fallaCritica : Bool;
+      enMarcha : Bool;
+      marchaVfd : Bool;
+      hbIgual : Bool;
+      zsw1 : Word;
+      nist : Int;
+      alarmas : Word;
+      bits : Word;
+      tOper : LReal;
+   END_VAR
+
+
+BEGIN
+	REGION Tiempo de ciclo
+	    // RUNTIME devuelve los segundos desde la llamada anterior.
+	    #dt := RUNTIME(#memRuntime);
+	    IF (#dt < 0.0) OR (#dt > 1.0) THEN   // primer ciclo o tras un STOP
+	        #dt := 0.0;
+	    END_IF;
+	    #dtR := LREAL_TO_REAL(#dt);
+	END_REGION
+
+	REGION Comandos del HMI y pulsadores físicos
+	    #rearme := "DB_HMI".Cmd.Rearme;
+	    IF "DB_Param".UsarEntradasFisicas THEN
+	        #start := "DB_HMI".Cmd.Start OR "DI_Start";
+	        #stop := "DB_HMI".Cmd.Stop OR NOT "DI_Stop";                 // DI_Stop es NC
+	        #emergencia := NOT "DI_ParoEmergencia";                      // hongo NC
+	        #cadenaAbierta := "DI_ParoEmergencia" AND NOT "DI_CadenaSeguridad"; // termostato abierto
+	    ELSE
+	        #start := "DB_HMI".Cmd.Start;
+	        #stop := "DB_HMI".Cmd.Stop;
+	        #emergencia := FALSE;
+	        #cadenaAbierta := FALSE;
+	    END_IF;
+
+	    // El paro de emergencia del HMI queda enclavado hasta el Rearme
+	    IF "DB_HMI".Cmd.ParoEmergencia THEN
+	        #paroHMI := TRUE;
+	    END_IF;
+	    IF #rearme AND NOT #emergencia THEN
+	        #paroHMI := FALSE;
+	        "DB_Produccion".RechazoPendiente := FALSE;
+	    END_IF;
+	    #emergencia := #emergencia OR #paroHMI;
+	END_REGION
+
+	REGION Medición de temperatura
+	    IF "DB_Param".Sim.Activa THEN
+	        #instSimPlanta(Calefactor := #calefactor,
+	                       dt := #dtR * "DB_Param".Sim.FactorTiempo,
+	                       Potencia_W := "DB_Param".Sim.Potencia_W,
+	                       C_Placa := "DB_Param".Sim.C_Placa,
+	                       R_Placa := "DB_Param".Sim.R_Placa,
+	                       C_Camara := "DB_Param".Sim.C_Camara,
+	                       R_Camara := "DB_Param".Sim.R_Camara,
+	                       T_Amb := "DB_Param".Sim.T_Amb,
+	                       Tau_Sensor := "DB_Param".Sim.Tau_Sensor);
+	        #pv := #instSimPlanta.T_Sensor;
+	        #mA := 4.0 + 16.0 * (#pv - "DB_Param".Escalado.T_Min)
+	        / ("DB_Param".Escalado.T_Max - "DB_Param".Escalado.T_Min);
+	        #fallaSensor := FALSE;
+	    ELSE
+	        "FC_EscalarRTD"(Raw := "AI_Temperatura",
+	                        V_Min := "DB_Param".Escalado.AI_Vmin,
+	                        V_Max := "DB_Param".Escalado.AI_Vmax,
+	                        R_Shunt := "DB_Param".Escalado.R_Shunt,
+	                        T_Min := "DB_Param".Escalado.T_Min,
+	                        T_Max := "DB_Param".Escalado.T_Max,
+	                        Temperatura => #pv,
+	                        Corriente_mA => #mA,
+	                        Falla => #fallaSensor);
+	    END_IF;
+
+	    // Filtro de primer orden contra ruido eléctrico (tau = FiltroTau_s)
+	    IF "DB_Param".Proceso.FiltroTau_s > 0.0 THEN
+	        #pvFiltrada := #pvFiltrada + (#pv - #pvFiltrada)
+	        * MIN(IN1 := 1.0, IN2 := #dtR / "DB_Param".Proceso.FiltroTau_s);
+	    ELSE
+	        #pvFiltrada := #pv;
+	    END_IF;
+	    IF #fallaSensor THEN
+	        #pvFiltrada := #pv;
+	    END_IF;
+	    #pv := #pvFiltrada;
+	END_REGION
+
+	REGION Set point
+	    "DB_Param".Proceso.SP := LIMIT(MN := "DB_Param".Proceso.SP_Min,
+	                                   IN := "DB_Param".Proceso.SP,
+	                                   MX := "DB_Param".Proceso.SP_Max);
+	    #sp := "DB_Param".Proceso.SP;
+	    #absE := ABS(#sp - #pv);
+	END_REGION
+
+	REGION Máquina de estados
+	    #fallaCritica := #fallaSensor OR (#pv >= "DB_Param".Proceso.T_Disparo) OR #cadenaAbierta;
+
+	    IF #emergencia THEN
+	        #estado := 3;
+	    ELSIF #estado = 3 THEN
+	        IF #rearme THEN
+	            #estado := 0;
+	        END_IF;
+	    ELSIF #estado = 4 THEN
+	        IF #rearme AND NOT #fallaCritica THEN
+	            #estado := 0;
+	        END_IF;
+	    ELSIF #fallaCritica THEN
+	        #estado := 4;
+	    ELSIF #stop THEN
+	        #estado := 0;
+	    ELSIF (#estado = 0) AND #start THEN
+	        #estado := 1;
+	    ELSIF #estado = 1 THEN
+	        IF #tonEstab.Q THEN
+	            #estado := 2;
+	        END_IF;
+	    ELSIF (#estado = 2) AND (#absE > "DB_Param".Variador.BandaReinicio) THEN
+	        #estado := 1;
+	    END_IF;
+
+	    #tonEstab(IN := (#estado = 1) AND (#absE <= "DB_Param".Proceso.TolConsigna),
+	              PT := DINT_TO_TIME(REAL_TO_DINT("DB_Param".Proceso.T_Estabilizacion_s * 1000.0)));
+	    #enMarcha := (#estado = 1) OR (#estado = 2);
+	END_REGION
+
+	REGION Control ON-OFF del calefactor
+	    #instOnOff(PV := #pv,
+	               SP := #sp,
+	               Histeresis := "DB_Param".Proceso.Histeresis,
+	               Habilitar := #enMarcha AND NOT #fallaCritica,
+	               AccionInversa := FALSE);
+	    #calefactor := #instOnOff.Salida;
+	    "DQ_Calefactor" := #calefactor;
+	    "DQ_Ventilador" := #enMarcha;      // recirculación de aire dentro de la cámara
+
+	    IF #calefactor THEN
+	        #u := 100.0;
+	    ELSE
+	        #u := 0.0;
+	    END_IF;
+	    #duty := #duty + (#u - #duty) * MIN(IN1 := 1.0, IN2 := #dtR / 60.0);
+	END_REGION
+
+	REGION Variador de velocidad - agitador
+	    IF "DB_HMI".Cmd.VFD_Arranque THEN
+	        #vfdHabilitado := TRUE;
+	    END_IF;
+	    IF "DB_HMI".Cmd.VFD_Parada OR (#estado >= 3) THEN
+	        #vfdHabilitado := FALSE;
+	    END_IF;
+
+	    #instVel(PV := #pv,
+	             SP := #sp,
+	             Habilitar := #enMarcha AND #vfdHabilitado,
+	             TolConsigna := "DB_Param".Proceso.TolConsigna,
+	             BandaReinicio := "DB_Param".Variador.BandaReinicio,
+	             ErrorVelMax := "DB_Param".Variador.ErrorVelMax,
+	             Vmin_pct := "DB_Param".Variador.Vmin_pct,
+	             Vmax_pct := "DB_Param".Variador.Vmax_pct,
+	             ModoManual := "DB_Param".Variador.ModoManual,
+	             VelManual_pct := "DB_Param".Variador.VelManual_pct);
+	    #marchaVfd := #vfdHabilitado AND #enMarcha AND (#instVel.VelRef_pct > 0.0);
+
+	    IF "DB_Param".Sim.Activa THEN
+	        #zsw1 := #instSimVFD.ZSW1;
+	        #nist := #instSimVFD.NIST_A;
+	    ELSE
+	        #zsw1 := "VFD_ZSW1";
+	        #nist := "VFD_NIST";
+	    END_IF;
+
+	    #instVFD(Marcha := #marchaVfd,
+	             Reversa := "DB_HMI".Sel.Reversa,
+	             VelRef_pct := #instVel.VelRef_pct,
+	             AckFalla := #rearme,
+	             VelNominal_rpm := "DB_Param".Variador.VelNominal_rpm,
+	             ZSW1 := #zsw1,
+	             NIST_A := #nist);
+
+	    IF "DB_Param".Sim.Activa THEN
+	        #instSimVFD(STW1 := #instVFD.STW1,
+	                    NSOLL_A := #instVFD.NSOLL_A,
+	                    dt := #dtR,
+	                    Rampa_s := "DB_Param".Sim.Rampa_s);
+	        "VFD_STW1" := 16#047E;          // en simulación el variador real queda en OFF1
+	        "VFD_NSOLL" := 0;
+	    ELSE
+	        "VFD_STW1" := #instVFD.STW1;
+	        "VFD_NSOLL" := #instVFD.NSOLL_A;
+	    END_IF;
+	END_REGION
+
+	REGION Producción, costos y KPI
+	    #instProd(dt := #dt,
+	              Estado := #estado,
+	              PV := #pv,
+	              SP := #sp,
+	              Calefactor := #calefactor,
+	              ResetTurno := "DB_HMI".Cmd.ResetTurno,
+	              RegistrarVenta := "DB_HMI".Cmd.RegistrarVenta,
+	              CantidadVenta := "DB_HMI".Sel.CantidadVenta,
+	              DemandaAuto := "DB_HMI".Sel.DemandaAuto,
+	              TolCalidad := "DB_Param".Proceso.TolCalidad,
+	              MaxFueraTol_s := "DB_Param".Proceso.MaxFueraTol_s,
+	              T_Lote_s := "DB_Param".Proceso.T_Lote_s);
+	END_REGION
+
+	REGION Alarmas
+	    // Retardo de 10 s en H y L para no generar alarmas molestas (ISA-18.2)
+	    #tonAlta(IN := #enMarcha AND (#pv > #sp + "DB_Param".Proceso.T_Alta_Delta), PT := T#10S);
+	    #tonBaja(IN := (#estado = 2) AND (#pv < #sp - "DB_Param".Proceso.T_Baja_Delta), PT := T#10S);
+
+	    // Vigilancia del gateway: su latido debe cambiar al menos cada 10 s
+	    #hbIgual := "DB_Gateway".GW_Heartbeat = #ultHeartbeat;
+	    #ultHeartbeat := "DB_Gateway".GW_Heartbeat;
+	    #tonGateway(IN := #hbIgual, PT := T#10S);
+
+	    #alarmas := 16#0000;
+	    #alarmas.%X0 := #estado = 3;
+	    #alarmas.%X1 := #tonAlta.Q;
+	    #alarmas.%X2 := #pv >= "DB_Param".Proceso.T_Disparo;
+	    #alarmas.%X3 := #tonBaja.Q;
+	    #alarmas.%X4 := #fallaSensor;
+	    #alarmas.%X5 := #instVFD.Falla;
+	    #alarmas.%X6 := #instVFD.Advertencia;
+	    #alarmas.%X7 := #tonGateway.Q;
+	    #alarmas.%X8 := "DB_Produccion".RechazoPendiente;
+	    #alarmas.%X9 := "DB_Produccion".TurnoActivo AND ("DB_Produccion".Inventario < "DB_Param".Costos.Inventario_Min);
+	    #alarmas.%X10 := #cadenaAbierta;
+	    #alarmas.%X11 := "DB_Param".Sim.Activa;
+	END_REGION
+
+	REGION Pilotos IEC 60073
+	    // verde = marcha, amarillo = condición anormal/transitoria, rojo = emergencia
+	    #tParpadeo := #tParpadeo + #dtR;
+	    IF #tParpadeo >= 0.5 THEN
+	        #tParpadeo := 0.0;
+	        #parpadeo := NOT #parpadeo;
+	    END_IF;
+	    "DQ_LuzVerde" := #enMarcha;
+	    "DQ_LuzAmarilla" := (#estado = 1) OR ((#alarmas AND 16#03FE) <> 16#0000);
+	    "DQ_LuzRoja" := (#estado = 3) OR ((#estado = 4) AND #parpadeo);
+	END_REGION
+
+	REGION Estado para el HMI
+	    "DB_HMI".Est.Estado := #estado;
+	    "DB_HMI".Est.PV := #pv;
+	    "DB_HMI".Est.SP := #sp;
+	    "DB_HMI".Est.Error := #sp - #pv;
+	    "DB_HMI".Est.Senal_mA := #mA;
+	    "DB_HMI".Est.Calefactor := #calefactor;
+	    "DB_HMI".Est.Ventilador := #enMarcha;
+	    "DB_HMI".Est.EnConsigna := #estado = 2;
+	    "DB_HMI".Est.Emergencia := #estado = 3;
+	    "DB_HMI".Est.FallaSensor := #fallaSensor;
+	    "DB_HMI".Est.CadenaSeguridadOK := NOT #cadenaAbierta AND NOT #emergencia;
+	    "DB_HMI".Est.VFD_Habilitado := #vfdHabilitado;
+	    "DB_HMI".Est.VFD_EnMarcha := #instVFD.EnMarcha;
+	    "DB_HMI".Est.VFD_Listo := #instVFD.Listo;
+	    "DB_HMI".Est.VFD_Falla := #instVFD.Falla;
+	    "DB_HMI".Est.VFD_Advertencia := #instVFD.Advertencia;
+	    "DB_HMI".Est.VFD_VelRef_pct := #instVel.VelRef_pct;
+	    "DB_HMI".Est.VFD_Vel_pct := #instVFD.Vel_pct;
+	    "DB_HMI".Est.VFD_Vel_rpm := #instVFD.Vel_rpm;
+	    "DB_HMI".Est.VFD_Sentido := #instVFD.Sentido;
+	    "DB_HMI".Est.Alarmas := #alarmas;
+	    "DB_HMI".Est.DutyCalefactor_pct := #duty;
+	    "DB_HMI".Est.TiempoEnBanda_pct := "DB_Produccion".TiempoEnBanda_pct;
+	    "DB_HMI".Est.TiempoLote_s := LREAL_TO_REAL("DB_Produccion".T_Lote_s);
+	    "DB_HMI".Est.ProgresoLote_pct := LREAL_TO_REAL(100.0 * "DB_Produccion".T_Lote_s
+	                                                   / MAX(IN1 := LREAL#1.0, IN2 := REAL_TO_LREAL("DB_Param".Proceso.T_Lote_s)));
+	    "DB_HMI".Est.GatewayOK := NOT #tonGateway.Q;
+	    "DB_HMI".Est.NubeEstado := "DB_Gateway".GW_EstadoNube;
+	    "DB_HMI".Est.PendientesNube := "DB_Gateway".GW_Pendientes;
+	    "DB_HMI".Est.LuzIntermitente := #parpadeo;
+	END_REGION
+
+	REGION Solicitudes de reporte - handshake por contadores con el gateway
+	    IF "DB_HMI".Cmd.ReporteLocal THEN
+	        "DB_Gateway".ReqCnt_RepLocal := ("DB_Gateway".ReqCnt_RepLocal + 1) MOD 30000;
+	    END_IF;
+	    IF "DB_HMI".Cmd.ReporteNubeSup THEN
+	        "DB_Gateway".ReqCnt_RepNubeSup := ("DB_Gateway".ReqCnt_RepNubeSup + 1) MOD 30000;
+	    END_IF;
+	    IF "DB_HMI".Cmd.ReporteNubeGer THEN
+	        "DB_Gateway".ReqCnt_RepNubeGer := ("DB_Gateway".ReqCnt_RepNubeGer + 1) MOD 30000;
+	    END_IF;
+	    "DB_HMI".Est.RepLocalPend := "DB_Gateway".ReqCnt_RepLocal <> "DB_Gateway".AckCnt_RepLocal;
+	    "DB_HMI".Est.RepNubeSupPend := "DB_Gateway".ReqCnt_RepNubeSup <> "DB_Gateway".AckCnt_RepNubeSup;
+	    "DB_HMI".Est.RepNubeGerPend := "DB_Gateway".ReqCnt_RepNubeGer <> "DB_Gateway".AckCnt_RepNubeGer;
+	END_REGION
+
+	REGION Datos para el gateway - DB no optimizado
+	    #bits := 16#0000;
+	    #bits.%X0 := #enMarcha;
+	    #bits.%X1 := #calefactor;
+	    #bits.%X2 := #vfdHabilitado;
+	    #bits.%X3 := #instVFD.EnMarcha;
+	    #bits.%X4 := #instVFD.Falla;
+	    #bits.%X5 := #estado = 2;
+	    #bits.%X6 := #estado = 3;
+	    #bits.%X7 := "DB_Param".Sim.Activa;
+	    #bits.%X8 := #enMarcha;
+	    #bits.%X9 := "DB_Param".Variador.ModoManual;
+	    #bits.%X10 := "DB_Produccion".TurnoActivo;
+
+	    "DB_Gateway".PV_Temp := #pv;
+	    "DB_Gateway".SP_Temp := #sp;
+	    "DB_Gateway".Error_Temp := #sp - #pv;
+	    "DB_Gateway".Senal_mA := #mA;
+	    "DB_Gateway".Duty_Calefactor_pct := #duty;
+	    "DB_Gateway".TiempoEnBanda_pct := "DB_Produccion".TiempoEnBanda_pct;
+	    "DB_Gateway".VelRef_pct := #instVel.VelRef_pct;
+	    "DB_Gateway".Vel_pct := #instVFD.Vel_pct;
+	    "DB_Gateway".Vel_rpm := #instVFD.Vel_rpm;
+	    "DB_Gateway".ProgresoLote_pct := "DB_HMI".Est.ProgresoLote_pct;
+	    "DB_Gateway".Energia_kWh := LREAL_TO_REAL("DB_Produccion".Energia_kWh);
+	    "DB_Gateway".Costo_Energia := "DB_Produccion".Costo_Energia;
+	    "DB_Gateway".Leche_L := "DB_Produccion".Leche_L;
+	    "DB_Gateway".Cultivo_g := "DB_Produccion".Cultivo_g;
+	    "DB_Gateway".Azucar_kg := "DB_Produccion".Azucar_kg;
+	    "DB_Gateway".Costo_Materiales := "DB_Produccion".Costo_Materiales;
+	    "DB_Gateway".T_Turno_h := "DB_Produccion".T_Turno_h;
+	    "DB_Gateway".T_Muerto_h := "DB_Produccion".T_Muerto_h;
+	    "DB_Gateway".Costo_Paradas := "DB_Produccion".Costo_Paradas;
+	    "DB_Gateway".Ingresos := "DB_Produccion".Ingresos;
+	    "DB_Gateway".Utilidad := "DB_Produccion".Utilidad;
+	    "DB_Gateway".Margen_pct := "DB_Produccion".Margen_pct;
+	    "DB_Gateway".OEE_pct := "DB_Produccion".OEE_pct;
+	    "DB_Gateway".Disponibilidad_pct := "DB_Produccion".Disponibilidad_pct;
+	    "DB_Gateway".Rendimiento_pct := "DB_Produccion".Rendimiento_pct;
+	    "DB_Gateway".Calidad_pct := "DB_Produccion".Calidad_pct;
+	    "DB_Gateway".Costo_Unitario := "DB_Produccion".Costo_Unitario;
+	    "DB_Gateway".kWh_por_Unidad := "DB_Produccion".kWh_por_Unidad;
+	    "DB_Gateway".Lotes_Total := "DB_Produccion".Lotes_Total;
+	    "DB_Gateway".Lotes_Buenos := "DB_Produccion".Lotes_Buenos;
+	    "DB_Gateway".Lotes_Rechazados := "DB_Produccion".Lotes_Rechazados;
+	    "DB_Gateway".Unidades_Producidas := "DB_Produccion".Unidades;
+	    "DB_Gateway".Unidades_Vendidas := "DB_Produccion".Vendidas;
+	    "DB_Gateway".Inventario_Und := "DB_Produccion".Inventario;
+	    "DB_Gateway".Envases_Usados := "DB_Produccion".Envases;
+	    "DB_Gateway".Estado := #estado;
+	    "DB_Gateway".Sentido := #instVFD.Sentido;
+	    "DB_Gateway".Bits_Estado := #bits;
+	    "DB_Gateway".Alarmas := #alarmas;
+	END_REGION
+
+	REGION Borrar comandos del HMI ya atendidos
+	    "DB_HMI".Cmd.Start := FALSE;
+	    "DB_HMI".Cmd.Stop := FALSE;
+	    "DB_HMI".Cmd.ParoEmergencia := FALSE;
+	    "DB_HMI".Cmd.Rearme := FALSE;
+	    "DB_HMI".Cmd.VFD_Arranque := FALSE;
+	    "DB_HMI".Cmd.VFD_Parada := FALSE;
+	    "DB_HMI".Cmd.ReporteLocal := FALSE;
+	    "DB_HMI".Cmd.ReporteNubeSup := FALSE;
+	    "DB_HMI".Cmd.ReporteNubeGer := FALSE;
+	    "DB_HMI".Cmd.ResetTurno := FALSE;
+	    "DB_HMI".Cmd.RegistrarVenta := FALSE;
+	END_REGION
+END_FUNCTION_BLOCK

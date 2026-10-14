@@ -1,0 +1,37 @@
+# Copie este archivo como config.toml y ajústelo.
+
+[estacion]
+nombre = "Grupo 1 - Banco 3"     # identifica sus filas en la base de datos de la nube
+
+[plc]
+modo = "snap7"                   # "snap7" = PLC real, "simulado" = gemelo sin PLC
+ip = "192.168.0.1"               # IP de la CPU S7-1500
+rack = 0
+slot = 1                         # S7-1500: rack 0, slot 1
+db_gateway = 100                 # número del DB "DB_Gateway" en TIA Portal
+
+[simulacion]
+factor_tiempo = 1.0              # >1 acelera la planta simulada
+reportes_cada_s = 0              # >0 pide reportes automáticamente (solo pruebas)
+
+[muestreo]
+proceso_s = 1.0                  # periodo de muestreo de proceso
+gerencia_s = 10.0                # periodo de muestreo de gerencia
+sync_s = 5.0                     # cada cuánto se sube lo pendiente a la nube
+
+[bd_local]
+url = "sqlite:///scada_local.db"
+# Otras opciones: "mssql+pyodbc://usuario:clave@localhost/SCADA?driver=ODBC+Driver+17+for+SQL+Server"
+#                 "mysql+pymysql://usuario:clave@localhost/scada"
+
+[bd_nube]
+# Mejor NO escriba la contraseña aquí: defina la variable de entorno BD_NUBE_URL.
+# Supabase: Project Settings > Database > Connection string (URI, "Session pooler"):
+# url = "postgresql+psycopg2://postgres.xxxxx:CLAVE@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+url = ""
+
+[reportes]
+carpeta = "reportes"
+ventana_min = 30                 # minutos que cubre cada reporte
+tolerancia_c = 2.0               # banda de calidad usada en el reporte
+abrir_automaticamente = true     # en Windows abre el PDF al generarlo

@@ -1,0 +1,7 @@
+# El .gitignore de la raíz excluye *.docx y reportes/; aquí sí se versiona el informe.
+!*.docx
+gateway/config.toml
+gateway/scada_local.db
+gateway/reportes/
+__pycache__/
+.pytest_cache/

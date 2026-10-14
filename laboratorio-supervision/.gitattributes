@@ -1,0 +1,4 @@
+# Fuentes de TIA Portal: UTF-8 con BOM y CRLF, sin normalizar
+*.scl -text
+*.db -text
+*.bat text eol=crlf

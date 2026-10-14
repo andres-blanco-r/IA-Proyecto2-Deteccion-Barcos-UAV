@@ -1,0 +1,27 @@
+﻿// =====================================================================================
+//  Laboratorio de Supervisión - Automatización Industrial (UMNG)
+//  Instancia de FB_Planta y OB1. Importar al final (reemplaza el "Main [OB1]" vacío).
+// =====================================================================================
+DATA_BLOCK "IDB_Planta"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+"FB_Planta"
+
+BEGIN
+
+END_DATA_BLOCK
+
+ORGANIZATION_BLOCK "Main"
+TITLE = "Main Program Sweep (Cycle)"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	// Proceso de temperatura (planta física o gemelo, según "DB_Param".Sim.Activa)
+	"IDB_Planta"();
+	
+	// Parte emulada en Factory IO (escena "Level control"): descomente después de
+	// importar 05_FactoryIO_Nivel.scl y su tabla de variables.
+	// "IDB_NivelFactoryIO"();
+END_ORGANIZATION_BLOCK

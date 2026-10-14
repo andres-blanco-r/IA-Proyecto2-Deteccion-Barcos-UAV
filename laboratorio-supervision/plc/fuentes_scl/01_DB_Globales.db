@@ -1,0 +1,207 @@
+﻿// =====================================================================================
+//  Laboratorio de Supervisión - Automatización Industrial (UMNG)
+//  Proceso: incubadora de yogur con agitador accionado por variador SINAMICS G120 (PROFINET)
+//  Bloques de datos globales. Importar en este orden:
+//    01_DB_Globales.db -> 02_DB_Gateway.db -> 03_Bloques.scl -> 04_Main.scl
+//  (antes importe la tabla de variables plc/tablas/Variables_PLC.xlsx)
+// =====================================================================================
+
+// -------------------------------------------------------------------------------------
+// DB_Param: parámetros (remanentes). Los edita el HMI de supervisor/gerencia.
+// CAMBIE los valores de "Costos" por los de su propio proceso: deben ser distintos
+// a los de los demás grupos.
+// -------------------------------------------------------------------------------------
+DATA_BLOCK "DB_Param"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   STRUCT
+      Proceso : Struct
+         SP : Real := 43.0;                  // Set point [°C] (incubación del yogur)
+         SP_Min : Real := 25.0;              // Límite inferior del SP [°C]
+         SP_Max : Real := 55.0;              // Límite superior del SP [°C] (carcasa en PETG)
+         Histeresis : Real := 1.0;           // Banda total del ON-OFF [°C] (+/-0.5)
+         TolConsigna : Real := 0.5;          // |e| para "en consigna" [°C]
+         T_Estabilizacion_s : Real := 30.0;  // Tiempo en consigna antes de iniciar el lote [s]
+         T_Alta_Delta : Real := 4.0;         // Alarma H: PV > SP + delta [°C]
+         T_Baja_Delta : Real := 2.0;         // Alarma L (en consigna): PV < SP - delta [°C]
+         T_Disparo : Real := 60.0;           // Alarma HH: apaga calefactor y pasa a FALLA [°C]
+         TolCalidad : Real := 2.0;           // |e| máximo aceptable durante la fermentación [°C]
+         MaxFueraTol_s : Real := 60.0;       // Tiempo máximo fuera de tolerancia por lote [s]
+         T_Lote_s : Real := 300.0;           // Duración del lote [s] (demo: 5 min; real: 4-6 h)
+         FiltroTau_s : Real := 1.0;          // Filtro de primer orden de la medida [s]
+      END_STRUCT;
+      Escalado : Struct
+         AI_Vmin : Real := 1.0;              // Voltios que corresponden a 0 cuentas (rango 1..5 V)
+         AI_Vmax : Real := 5.0;              // Voltios que corresponden a 27648 cuentas
+         R_Shunt : Real := 250.0;            // Resistencia de carga del lazo 4-20 mA [ohm]
+         T_Min : Real := 0.0;                // Temperatura a 4 mA [°C] (ajuste del XTR105)
+         T_Max : Real := 100.0;              // Temperatura a 20 mA [°C]
+      END_STRUCT;
+      Variador : Struct
+         Vmin_pct : Real := 20.0;            // Velocidad mínima mientras se acerca al SP [%]
+         Vmax_pct : Real := 100.0;           // Velocidad máxima [%]
+         ErrorVelMax : Real := 15.0;         // Con |e| >= este valor va a Vmax [°C]
+         BandaReinicio : Real := 4.0;        // Si |e| supera esto tras llegar al SP, vuelve a girar [°C]
+         VelNominal_rpm : Real := 1800.0;    // = p2000 del G120 (16#4000 = 100 %)
+         ModoManual : Bool := FALSE;         // Solo para puesta en marcha (supervisor)
+         VelManual_pct : Real := 30.0;
+      END_STRUCT;
+      Sim : Struct                           // Gemelo de la planta para PLCSIM
+         Activa : Bool := FALSE;             // TRUE = ignora RTD y variador reales
+         FactorTiempo : Real := 1.0;         // Acelera solo el modelo térmico
+         Potencia_W : Real := 20.0;
+         C_Placa : Real := 80.0;             // [J/K]
+         R_Placa : Real := 0.5;              // [K/W]
+         C_Camara : Real := 450.0;           // [J/K]
+         R_Camara : Real := 2.4;             // [K/W]
+         T_Amb : Real := 19.0;               // [°C]
+         Tau_Sensor : Real := 15.0;          // [s]
+         Rampa_s : Real := 5.0;              // Rampa del variador simulado [s]
+      END_STRUCT;
+      Costos : Struct                        // Datos de gerencia (propios de cada grupo)
+         UnidadesPorLote : DInt := 100;      // Vasos de 200 mL por lote de 20 L
+         Leche_L_Lote : Real := 20.0;
+         Precio_Leche_L : Real := 3200.0;    // [COP/L]
+         Cultivo_g_Lote : Real := 5.0;
+         Precio_Cultivo_g : Real := 3000.0;  // [COP/g]
+         Azucar_kg_Lote : Real := 1.6;
+         Precio_Azucar_kg : Real := 4500.0;  // [COP/kg]
+         Precio_Envase : Real := 350.0;      // [COP/und]
+         Potencia_Planta_kW : Real := 3.0;   // Calefactor equivalente a escala industrial [kW]
+         Precio_kWh : Real := 950.0;         // [COP/kWh]
+         CostoHoraParada : Real := 85000.0;  // Mano de obra + costos fijos [COP/h]
+         Precio_Venta_Und : Real := 3800.0;  // [COP/und]
+         T_CicloIdeal_s : Real := 300.0;     // Tiempo de ciclo ideal por lote [s]
+         Inventario_Min : DInt := 50;        // Alarma de inventario bajo [und]
+         T_EntrePedidos_s : Real := 60.0;    // Demanda simulada: un pedido cada X s
+         PedidoMax : DInt := 40;             // Demanda simulada: tamaño máximo del pedido
+      END_STRUCT;
+      UsarEntradasFisicas : Bool := TRUE;    // FALSE en PLCSIM (sin pulsadores ni paro físico)
+   END_STRUCT;
+
+
+BEGIN
+
+END_DATA_BLOCK
+
+// -------------------------------------------------------------------------------------
+// DB_HMI: interfaz con WinCC.
+//   Cmd.*  -> el HMI los pone en TRUE (evento "Pulsar": ActivarBit) y el PLC los borra.
+//   Sel.*  -> selectores que mantienen su valor.
+//   Est.*  -> estado que muestra el HMI (solo lectura).
+// -------------------------------------------------------------------------------------
+DATA_BLOCK "DB_HMI"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+   STRUCT
+      Cmd : Struct
+         Start : Bool;
+         Stop : Bool;
+         ParoEmergencia : Bool;
+         Rearme : Bool;                      // Rearme de emergencia/falla y acuse del variador
+         VFD_Arranque : Bool;
+         VFD_Parada : Bool;
+         ReporteLocal : Bool;                // Supervisor: reporte en el PC
+         ReporteNubeSup : Bool;              // Supervisor: reporte en la nube
+         ReporteNubeGer : Bool;              // Gerencia: reporte en la nube
+         ResetTurno : Bool;                  // Gerencia: reinicia contadores de turno
+         RegistrarVenta : Bool;              // Gerencia: registra una venta de Sel.CantidadVenta
+      END_STRUCT;
+      Sel : Struct
+         Reversa : Bool;                     // FALSE = adelante, TRUE = reversa
+         DemandaAuto : Bool := TRUE;         // Pedidos simulados automáticos
+         CantidadVenta : DInt := 10;
+      END_STRUCT;
+      Est : Struct
+         Estado : Int;                       // 0 Parado,1 Calentando,2 En consigna,3 Emergencia,4 Falla
+         PV : Real;                          // [°C]
+         SP : Real;                          // [°C]
+         Error : Real;                       // SP - PV [°C]
+         Senal_mA : Real;
+         Calefactor : Bool;
+         Ventilador : Bool;
+         EnConsigna : Bool;
+         Emergencia : Bool;
+         FallaSensor : Bool;
+         CadenaSeguridadOK : Bool;
+         VFD_Habilitado : Bool;
+         VFD_EnMarcha : Bool;
+         VFD_Listo : Bool;
+         VFD_Falla : Bool;
+         VFD_Advertencia : Bool;
+         VFD_VelRef_pct : Real;
+         VFD_Vel_pct : Real;
+         VFD_Vel_rpm : Real;
+         VFD_Sentido : Int;                  // 1 adelante, -1 reversa, 0 detenido
+         Alarmas : Word;                     // Disparador de las alarmas de bit del HMI
+         DutyCalefactor_pct : Real;
+         TiempoEnBanda_pct : Real;
+         ProgresoLote_pct : Real;
+         TiempoLote_s : Real;
+         GatewayOK : Bool;
+         NubeEstado : Int;                   // 0 sin nube, 1 OK, 2 error
+         PendientesNube : Int;
+         RepLocalPend : Bool;                // TRUE mientras el gateway genera el reporte
+         RepNubeSupPend : Bool;
+         RepNubeGerPend : Bool;
+         LuzIntermitente : Bool;             // 1 Hz para animaciones
+      END_STRUCT;
+   END_STRUCT;
+
+
+BEGIN
+
+END_DATA_BLOCK
+
+// -------------------------------------------------------------------------------------
+// DB_Produccion: acumulados del turno (remanentes) y KPI calculados.
+// Los acumuladores son LReal: con Real (24 bits de mantisa) sumar 5 ms a 28 800 s
+// pierde casi toda la resolución.
+// -------------------------------------------------------------------------------------
+DATA_BLOCK "DB_Produccion"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   STRUCT
+      TurnoActivo : Bool;
+      RechazoPendiente : Bool;               // Se borra con Rearme
+      T_Turno_s : LReal;
+      T_Muerto_s : LReal;
+      T_Banda_s : LReal;
+      T_Lote_s : LReal;
+      T_FueraTol_s : LReal;
+      T_Pedido_s : LReal;
+      Energia_kWh : LReal;
+      Lotes_Total : DInt;
+      Lotes_Buenos : DInt;
+      Lotes_Rechazados : DInt;
+      Unidades : DInt;
+      Vendidas : DInt;
+      Inventario : DInt;
+      Envases : DInt;
+      Semilla : Real := 0.5;                 // Generador pseudoaleatorio de pedidos
+      // ---- Resultados (los calcula FB_Produccion en cada ciclo) ----
+      Leche_L : Real;
+      Cultivo_g : Real;
+      Azucar_kg : Real;
+      Costo_Materiales : Real;
+      Costo_Energia : Real;
+      Costo_Paradas : Real;
+      Ingresos : Real;
+      Utilidad : Real;
+      Margen_pct : Real;
+      Disponibilidad_pct : Real;
+      Rendimiento_pct : Real;
+      Calidad_pct : Real;
+      OEE_pct : Real;
+      Costo_Unitario : Real;
+      kWh_por_Unidad : Real;
+      T_Turno_h : Real;
+      T_Muerto_h : Real;
+      TiempoEnBanda_pct : Real;
+   END_STRUCT;
+
+
+BEGIN
+
+END_DATA_BLOCK

@@ -1,0 +1,68 @@
+﻿// =====================================================================================
+//  Laboratorio de Supervisión - Parte emulada (objetivo específico 1)
+//  Control ON-OFF de NIVEL sobre la escena "Level control" de Factory IO.
+//  Reutiliza FB_OnOffHist (el mismo bloque del calefactor).
+//  Requiere la tabla "Tabla_FactoryIO" (Variables_PLC.xlsx). Ajuste las direcciones
+//  a las que asigne en Factory IO > Drivers > Siemens S7-1200/1500 (o PLCSIM).
+//  Escala analógica de Factory IO configurada como entero 0..27648 = 0..10 V.
+// =====================================================================================
+FUNCTION_BLOCK "FB_NivelFactoryIO"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_OUTPUT 
+      Nivel_pct : Real;
+      SP_pct : Real;
+      Llenando : Bool;
+      EnMarcha : Bool;
+   END_VAR
+
+   VAR 
+      instOnOff : "FB_OnOffHist";
+      Histeresis_pct : Real := 4.0;    // Banda total del ON-OFF de nivel [%]
+      Descarga_pct : Real := 30.0;     // Apertura fija de la válvula de descarga (perturbación) [%]
+   END_VAR
+
+
+BEGIN
+	#Nivel_pct := INT_TO_REAL("FIO_Nivel") / 27648.0 * 100.0;
+	#SP_pct := LIMIT(MN := 5.0, IN := INT_TO_REAL("FIO_Setpoint") / 27648.0 * 100.0, MX := 95.0);
+	
+	IF "FIO_Start" THEN
+	    #EnMarcha := TRUE;
+	END_IF;
+	IF NOT "FIO_Stop" THEN                 // botón Stop NC
+	    #EnMarcha := FALSE;
+	END_IF;
+	
+	#instOnOff(PV := #Nivel_pct,
+	           SP := #SP_pct,
+	           Histeresis := #Histeresis_pct,
+	           Habilitar := #EnMarcha,
+	           AccionInversa := FALSE);
+	#Llenando := #instOnOff.Salida;
+	
+	IF #Llenando THEN
+	    "FIO_ValvulaLlenado" := 27648;
+	ELSE
+	    "FIO_ValvulaLlenado" := 0;
+	END_IF;
+	IF #EnMarcha THEN
+	    "FIO_ValvulaDescarga" := REAL_TO_INT(#Descarga_pct / 100.0 * 27648.0);
+	ELSE
+	    "FIO_ValvulaDescarga" := 0;
+	END_IF;
+	"FIO_DisplayNivel" := "FIO_Nivel";
+	"FIO_DisplaySP" := "FIO_Setpoint";
+	"FIO_LuzStart" := #EnMarcha;
+	"FIO_LuzStop" := NOT #EnMarcha;
+END_FUNCTION_BLOCK
+
+DATA_BLOCK "IDB_NivelFactoryIO"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+"FB_NivelFactoryIO"
+
+BEGIN
+
+END_DATA_BLOCK
